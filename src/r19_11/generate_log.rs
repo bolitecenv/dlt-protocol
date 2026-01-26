@@ -1,54 +1,102 @@
+#![no_std]
+
 use crate::r19_11::*;
 
-// DLT Message Builder
-#[derive(Debug)]
+struct DltHeaderHtyp;
+
+impl DltHeaderHtyp {
+    const UEH_MASK: u8 = 0x01;
+    const MSBF_MASK: u8 = 0x02;
+    const WEID_MASK: u8 = 0x04;
+    const WSID_MASK: u8 = 0x08;
+    const WTMS_MASK: u8 = 0x10;
+    const VERS_MASK: u8 = 0xE0;
+}
+
+pub enum DltEndian {
+    Big,
+    Little,
+}
+
+pub struct DltCommonSettings {
+    pub endian: DltEndian,
+}
+
+pub struct DltCommonGetHandler {
+    pub get_timestamp: Option<fn() -> u32>,
+    pub get_session_id: Option<fn() -> u32>,
+}
+
+pub struct DltCommonBuilder {
+    pub settings: DltCommonSettings,
+    pub handlers: DltCommonGetHandler,
+}
+
+// DLT Common Message Builder thread safe, no_std static instance
+// Note: This requires unsafe or once_cell/lazy_static for true static initialization
+// with non-const values. Using const-compatible default here.
+pub static DLT_COMMON_BUILDER: DltCommonBuilder = DltCommonBuilder {
+    settings: DltCommonSettings {
+        endian: DltEndian::Big,
+    },
+    handlers: DltCommonGetHandler {
+        get_timestamp: None,
+        get_session_id: None,
+    },
+};
+
 pub struct DltMessageBuilder {
+    header_htyp: u8,
     message_counter: u8,
     ecu_id: [u8; DLT_ID_SIZE],
     session_id: u32,
     timestamp: u32,
     app_id: [u8; DLT_ID_SIZE],
     context_id: [u8; DLT_ID_SIZE],
+    endian: DltEndian,
+    get_tmsp: Option<fn() -> u32>,
+    get_sess_id: Option<fn() -> u32>,
 }
 
 impl DltMessageBuilder {
-    pub fn new() -> Self {
+    pub fn new(htyp: u8, msg_cnt: u8, ecu_id: &str, app_id: &str, ctx_id: &str) -> Self {
+        // Helper function to convert string to fixed-size array
+        fn str_to_id(s: &str, default: &[u8; DLT_ID_SIZE]) -> [u8; DLT_ID_SIZE] {
+            let mut id = *default;
+            let bytes = s.as_bytes();
+            let len = bytes.len().min(DLT_ID_SIZE);
+            id[..len].copy_from_slice(&bytes[..len]);
+            id
+        }
+
         Self {
-            message_counter: 0,
-            ecu_id: *b"ECU1",
+            header_htyp: htyp,
+            message_counter: msg_cnt,
+            ecu_id: str_to_id(ecu_id, b"ECU1"),
             session_id: 0,
             timestamp: 0,
-            app_id: *b"APP1",
-            context_id: *b"CTX1",
+            app_id: str_to_id(app_id, b"APP1"),
+            context_id: str_to_id(ctx_id, b"CTX1"),
+            endian: DltEndian::Big,
+            get_tmsp: None,
+            get_sess_id: None,
         }
-    }
-
-    pub fn with_ecu_id(mut self, ecu_id: [u8; DLT_ID_SIZE]) -> Self {
-        self.ecu_id = ecu_id;
-        self
-    }
-
-    pub fn with_app_id(mut self, app_id: [u8; DLT_ID_SIZE]) -> Self {
-        self.app_id = app_id;
-        self
-    }
-
-    pub fn with_context_id(mut self, context_id: [u8; DLT_ID_SIZE]) -> Self {
-        self.context_id = context_id;
-        self
-    }
-
-    pub fn with_session_id(mut self, session_id: u32) -> Self {
-        self.session_id = session_id;
-        self
-    }
-
-    pub fn set_timestamp(&mut self, timestamp: u32) {
-        self.timestamp = timestamp;
     }
 
     pub fn increment_counter(&mut self) {
         self.message_counter = self.message_counter.wrapping_add(1);
+    }
+
+    pub fn reset_counter(&mut self) {
+        self.message_counter = 0;
+    }
+
+    pub fn get_counter(&self) -> u8 {
+        self.message_counter
+    }
+
+    pub fn set_endian(&mut self, endian: DltEndian) {
+        self.endian = endian;
     }
 
     /// Generate a DLT log message
@@ -64,7 +112,7 @@ impl DltMessageBuilder {
 
         // Calculate total message length
         let mut total_len = DLT_STANDARD_HEADER_SIZE;
-        total_len += DLT_STANDARD_HEADER_EXTRA_SIZE; // ECU ID + Session ID + Timestamp
+        total_len += self.standard_header_extra_size(); // ECU ID + Session ID + Timestamp
         total_len += DLT_EXTENDED_HEADER_SIZE;
         total_len += payload.len();
 
@@ -72,34 +120,38 @@ impl DltMessageBuilder {
             return Err(DltError::BufferTooSmall);
         }
 
-        // Build HTYP byte
-        let htyp = DLT_VERSION | UEH_MASK | WEID_MASK | WSID_MASK | WTMS_MASK;
-
         // Write Standard Header
-        buffer[offset] = htyp;
+        buffer[offset] = self.header_htyp;
         offset += 1;
         buffer[offset] = self.message_counter;
         offset += 1;
 
-        // Write length (big-endian)
+        // Write length
         let len = total_len as u16;
-        buffer[offset..offset + 2].copy_from_slice(&len.to_be_bytes());
+        buffer[offset..offset + 2].copy_from_slice(&switch_endian_u16(len, &self.endian));
         offset += 2;
 
         // Write Standard Header Extra
-        buffer[offset..offset + 4].copy_from_slice(&self.ecu_id);
+        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(&self.ecu_id);
+        offset += DLT_ID_SIZE;
+
+        // If session ID getter is provided, use it
+        if let Some(get_sess_id) = self.get_sess_id {
+            self.session_id = get_sess_id();
+        }
+        // If timestamp getter is provided, use it
+        if let Some(get_tmsp) = self.get_tmsp {
+            self.timestamp = get_tmsp();
+        }
+
+        buffer[offset..offset + 4]
+            .copy_from_slice(&switch_endian_u32(self.session_id, &self.endian));
         offset += 4;
-        buffer[offset..offset + 4].copy_from_slice(&self.session_id.to_be_bytes());
-        offset += 4;
-        buffer[offset..offset + 4].copy_from_slice(&self.timestamp.to_be_bytes());
+        buffer[offset..offset + 4]
+            .copy_from_slice(&switch_endian_u32(self.timestamp, &self.endian));
         offset += 4;
 
         // Write Extended Header
-        // MSIN byte: Message Info
-        // Bit 0: Verbose mode (1 = verbose, 0 = non-verbose)
-        // Bit 1-3: Message Type Info (MTIN)
-        // Bit 4-6: Message Type (MSTP)
-        // Bit 7: UEH flag (always 0 in extended header)
         let verbose_bit = if verbose { 0x01 } else { 0x00 };
         let mtin_bits = (log_level.to_bits() & 0x0F) << 1;
         let mstp_bits = (MstpType::DltTypeLog.to_bits() & 0x07) << 4;
@@ -113,12 +165,12 @@ impl DltMessageBuilder {
         offset += 1;
 
         // APP ID
-        buffer[offset..offset + 4].copy_from_slice(&self.app_id);
-        offset += 4;
+        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(&self.app_id);
+        offset += DLT_ID_SIZE;
 
         // Context ID
-        buffer[offset..offset + 4].copy_from_slice(&self.context_id);
-        offset += 4;
+        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(&self.context_id);
+        offset += DLT_ID_SIZE;
 
         // Write Payload
         buffer[offset..offset + payload.len()].copy_from_slice(payload);
@@ -149,11 +201,19 @@ impl DltMessageBuilder {
     ) -> Result<usize, DltError> {
         self.generate_log_message(buffer, log_level, payload, true)
     }
-}
 
-impl Default for DltMessageBuilder {
-    fn default() -> Self {
-        Self::new()
+    fn standard_header_extra_size(&self) -> usize {
+        let mut size = 0;
+        if self.header_htyp & DltHeaderHtyp::WEID_MASK != 0 {
+            size += DLT_ID_SIZE; // ECU ID
+        }
+        if self.header_htyp & DltHeaderHtyp::WSID_MASK != 0 {
+            size += 4; // Session ID (not APP ID)
+        }
+        if self.header_htyp & DltHeaderHtyp::WTMS_MASK != 0 {
+            size += 4; // Timestamp
+        }
+        size
     }
 }
 
@@ -204,4 +264,21 @@ pub fn make_log_verbose(
     text: &[u8],
 ) -> Result<usize, DltError> {
     builder.log_text(buffer, MtinTypeDltLog::DltLogVerbose, text)
+}
+
+// switch endian byte array depends the DltEndian enum
+#[inline]
+fn switch_endian_u32(value: u32, endian: &DltEndian) -> [u8; 4] {
+    match endian {
+        DltEndian::Big => value.to_be_bytes(),
+        DltEndian::Little => value.to_le_bytes(),
+    }
+}
+
+#[inline]
+fn switch_endian_u16(value: u16, endian: &DltEndian) -> [u8; 2] {
+    match endian {
+        DltEndian::Big => value.to_be_bytes(),
+        DltEndian::Little => value.to_le_bytes(),
+    }
 }
