@@ -1,5 +1,3 @@
-#![no_std]
-
 use crate::r19_11::*;
 
 struct DltHeaderHtyp;
@@ -45,42 +43,66 @@ pub static DLT_COMMON_BUILDER: DltCommonBuilder = DltCommonBuilder {
     },
 };
 
-pub struct DltMessageBuilder {
+pub struct DltMessageBuilder<'a> {
     header_htyp: u8,
     message_counter: u8,
-    ecu_id: [u8; DLT_ID_SIZE],
+    ecu_id: &'a [u8; DLT_ID_SIZE],
     session_id: u32,
     timestamp: u32,
-    app_id: [u8; DLT_ID_SIZE],
-    context_id: [u8; DLT_ID_SIZE],
+    app_id: &'a [u8; DLT_ID_SIZE],
+    context_id: &'a [u8; DLT_ID_SIZE],
     endian: DltEndian,
     get_tmsp: Option<fn() -> u32>,
     get_sess_id: Option<fn() -> u32>,
 }
 
-impl DltMessageBuilder {
-    pub fn new(htyp: u8, msg_cnt: u8, ecu_id: &str, app_id: &str, ctx_id: &str) -> Self {
-        // Helper function to convert string to fixed-size array
-        fn str_to_id(s: &str, default: &[u8; DLT_ID_SIZE]) -> [u8; DLT_ID_SIZE] {
-            let mut id = *default;
-            let bytes = s.as_bytes();
-            let len = bytes.len().min(DLT_ID_SIZE);
-            id[..len].copy_from_slice(&bytes[..len]);
-            id
-        }
-
+impl<'a> DltMessageBuilder<'a> {
+    pub fn new() -> Self {
+        // Define a static default ECU ID to ensure a reference with the correct type and lifetime
+        static DEFAULT_ECU_ID: [u8; DLT_ID_SIZE] = *b"ECU\0";
+        static DEFAULT_APP_ID: [u8; DLT_ID_SIZE] = *b"APP\0";
+        static DEFAULT_CTX_ID: [u8; DLT_ID_SIZE] = *b"CTX\0";
         Self {
-            header_htyp: htyp,
-            message_counter: msg_cnt,
-            ecu_id: str_to_id(ecu_id, b"ECU1"),
+            header_htyp: UEH_MASK
+                | DltHeaderHtyp::WEID_MASK
+                | DltHeaderHtyp::WSID_MASK
+                | DltHeaderHtyp::WTMS_MASK
+                | (VERS_MASK & (0x1 << 5)), // Version 1
+            message_counter: 0,
+            ecu_id: &DEFAULT_ECU_ID,
             session_id: 0,
             timestamp: 0,
-            app_id: str_to_id(app_id, b"APP1"),
-            context_id: str_to_id(ctx_id, b"CTX1"),
+            app_id: &DEFAULT_APP_ID,
+            context_id: &DEFAULT_CTX_ID,
             endian: DltEndian::Big,
             get_tmsp: None,
             get_sess_id: None,
         }
+    }
+
+    pub fn htyp(mut self, htyp: u8) -> Self {
+        self.header_htyp = htyp;
+        self
+    }
+
+    pub fn msg_counter(mut self, msg_cnt: u8) -> Self {
+        self.message_counter = msg_cnt;
+        self
+    }
+
+    pub fn with_ecu_id(mut self, ecu_id: &'a [u8; DLT_ID_SIZE]) -> Self {
+        self.ecu_id = ecu_id;
+        self
+    }
+
+    pub fn with_app_id(mut self, app_id: &'a [u8; DLT_ID_SIZE]) -> Self {
+        self.app_id = app_id;
+        self
+    }
+
+    pub fn with_context_id(mut self, ctx_id: &'a [u8; DLT_ID_SIZE]) -> Self {
+        self.context_id = ctx_id;
+        self
     }
 
     pub fn increment_counter(&mut self) {
@@ -97,6 +119,14 @@ impl DltMessageBuilder {
 
     pub fn set_endian(&mut self, endian: DltEndian) {
         self.endian = endian;
+    }
+
+    pub fn set_timestamp_getter(&mut self, getter: fn() -> u32) {
+        self.get_tmsp = Some(getter);
+    }
+
+    pub fn set_session_id_getter(&mut self, getter: fn() -> u32) {
+        self.get_sess_id = Some(getter);
     }
 
     /// Generate a DLT log message
@@ -132,7 +162,7 @@ impl DltMessageBuilder {
         offset += 2;
 
         // Write Standard Header Extra
-        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(&self.ecu_id);
+        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.ecu_id);
         offset += DLT_ID_SIZE;
 
         // If session ID getter is provided, use it
@@ -165,11 +195,11 @@ impl DltMessageBuilder {
         offset += 1;
 
         // APP ID
-        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(&self.app_id);
+        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.app_id);
         offset += DLT_ID_SIZE;
 
         // Context ID
-        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(&self.context_id);
+        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.context_id);
         offset += DLT_ID_SIZE;
 
         // Write Payload
@@ -182,7 +212,7 @@ impl DltMessageBuilder {
         Ok(offset)
     }
 
-    /// Generate a simple text log message (non-verbose mode)
+    #[inline]
     pub fn log_text(
         &mut self,
         buffer: &mut [u8],
@@ -192,7 +222,7 @@ impl DltMessageBuilder {
         self.generate_log_message(buffer, log_level, text, false)
     }
 
-    /// Generate a verbose log message with type info
+    #[inline]
     pub fn log_verbose(
         &mut self,
         buffer: &mut [u8],
@@ -217,53 +247,13 @@ impl DltMessageBuilder {
     }
 }
 
-// Helper functions for creating common log messages
-pub fn make_log_fatal(
-    builder: &mut DltMessageBuilder,
-    buffer: &mut [u8],
-    text: &[u8],
-) -> Result<usize, DltError> {
-    builder.log_text(buffer, MtinTypeDltLog::DltLogFatal, text)
-}
-
-pub fn make_log_error(
-    builder: &mut DltMessageBuilder,
-    buffer: &mut [u8],
-    text: &[u8],
-) -> Result<usize, DltError> {
-    builder.log_text(buffer, MtinTypeDltLog::DltLogError, text)
-}
-
-pub fn make_log_warn(
-    builder: &mut DltMessageBuilder,
-    buffer: &mut [u8],
-    text: &[u8],
-) -> Result<usize, DltError> {
-    builder.log_text(buffer, MtinTypeDltLog::DltLogWarn, text)
-}
-
-pub fn make_log_info(
-    builder: &mut DltMessageBuilder,
-    buffer: &mut [u8],
-    text: &[u8],
-) -> Result<usize, DltError> {
-    builder.log_text(buffer, MtinTypeDltLog::DltLogInfo, text)
-}
-
-pub fn make_log_debug(
-    builder: &mut DltMessageBuilder,
-    buffer: &mut [u8],
-    text: &[u8],
-) -> Result<usize, DltError> {
-    builder.log_text(buffer, MtinTypeDltLog::DltLogDebug, text)
-}
-
-pub fn make_log_verbose(
-    builder: &mut DltMessageBuilder,
-    buffer: &mut [u8],
-    text: &[u8],
-) -> Result<usize, DltError> {
-    builder.log_text(buffer, MtinTypeDltLog::DltLogVerbose, text)
+// Helper function to convert binary to fixed size array for DLT ID
+#[inline]
+pub fn to_dlt_id_array(id: &[u8]) -> [u8; DLT_ID_SIZE] {
+    let mut array = [0u8; DLT_ID_SIZE];
+    let len = core::cmp::min(id.len(), DLT_ID_SIZE);
+    array[..len].copy_from_slice(&id[..len]);
+    array
 }
 
 // switch endian byte array depends the DltEndian enum

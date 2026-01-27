@@ -3,9 +3,9 @@ use dlt_protocol::r19_11::*;
 #[test]
 fn test_generate_log_message() {
     let mut builder = DltMessageBuilder::new()
-        .with_ecu_id(*b"TEST")
-        .with_app_id(*b"MYAP")
-        .with_context_id(*b"MYCT");
+        .with_ecu_id(b"TEST")
+        .with_app_id(b"MYAP")
+        .with_context_id(b"MYCT");
 
     let mut buffer = [0u8; 256];
     let text = b"Hello, DLT!";
@@ -53,4 +53,37 @@ fn test_buffer_too_small() {
 
     let result = builder.log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, text);
     assert_eq!(result, Err(DltError::BufferTooSmall));
+}
+
+#[test]
+fn test_payload_builder() {
+    let mut buffer = [0u8; 256];
+    let mut builder = PayloadBuilder::new(&mut buffer);
+
+    builder.add_u32(0x12345678).unwrap();
+    builder.add_string("Hello").unwrap();
+    builder.add_bool(true).unwrap();
+
+    assert!(builder.len() > 0);
+
+    // Verify first type info (u32)
+    let slice = builder.as_slice();
+    let first_type_info = u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]);
+    assert_eq!(first_type_info & 0x0F, 0x03); // TYLE = 32 bit
+    assert_eq!(first_type_info & (1 << 6), 1 << 6); // UINT bit
+}
+
+#[test]
+fn test_parse_and_build() {
+    let mut buffer = [0u8; 256];
+    let mut builder = PayloadBuilder::new(&mut buffer);
+
+    builder.add_u32(42).unwrap();
+    builder.add_string("Test").unwrap();
+
+    let payload = builder.as_slice();
+    let mut parser = PayloadParser::new(payload);
+
+    assert_eq!(parser.read_u32().unwrap(), 42);
+    assert_eq!(parser.read_string().unwrap(), "Test");
 }
