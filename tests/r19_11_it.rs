@@ -10,8 +10,29 @@ fn test_generate_log_message() {
     let mut buffer = [0u8; 256];
     let text = b"Hello, DLT!";
 
-    let result = builder.log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, text);
+    let result = builder.log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, 1, text);
     assert!(result.is_ok());
+
+    let target_buffer = {
+        let mut buf = Vec::new();
+        // Standard Header
+        buf.push(61); // Htyp with extended header
+        buf.push(0); // MsgCnt
+        buf.extend_from_slice(&(37u16.to_be_bytes())); // Length
+        buf.extend_from_slice(b"TEST"); // ECU ID
+        buf.extend_from_slice(&0u32.to_be_bytes()); // Session ID
+        buf.extend_from_slice(&0u32.to_be_bytes()); // Timestamp
+        // Extended Header
+        buf.push((MtinTypeDltLog::DltLogInfo.to_bits() << 4) | 0x0 | 0x01); // MtinTypeDltLog::DltLogInfo
+        buf.push(1); // NoArgs
+        buf.extend_from_slice(b"MYAP"); // App ID
+        buf.extend_from_slice(b"MYCT"); // Context ID
+        // Payload
+        buf.extend_from_slice(text); // Payload
+        buf
+    };
+
+    print!("len {}\n", target_buffer.len());
 
     let len = result.unwrap();
     assert!(len > 0);
@@ -21,6 +42,9 @@ fn test_generate_log_message() {
     assert_eq!(&buffer[4..8], b"TEST"); // ECU ID
     assert_eq!(&buffer[18..22], b"MYAP"); // App ID
     assert_eq!(&buffer[22..26], b"MYCT"); // Context ID
+    assert_eq!(&buffer[26..26 + text.len()], text); // Payload
+    assert_eq!(&buffer[..len], &target_buffer[..]); // Full buffer match
+    assert_eq!(len, target_buffer.len());
 }
 
 #[test]
@@ -30,17 +54,17 @@ fn test_message_counter_increment() {
     let text = b"Test";
 
     builder
-        .log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, text)
+        .log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, 1, text)
         .unwrap();
     assert_eq!(buffer[1], 0);
 
     builder
-        .log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, text)
+        .log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, 1, text)
         .unwrap();
     assert_eq!(buffer[1], 1);
 
     builder
-        .log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, text)
+        .log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, 1, text)
         .unwrap();
     assert_eq!(buffer[1], 2);
 }
@@ -51,7 +75,7 @@ fn test_buffer_too_small() {
     let mut buffer = [0u8; 10]; // Too small
     let text = b"Hello, DLT!";
 
-    let result = builder.log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, text);
+    let result = builder.log_text(&mut buffer, MtinTypeDltLog::DltLogInfo, 1, text);
     assert_eq!(result, Err(DltError::BufferTooSmall));
 }
 

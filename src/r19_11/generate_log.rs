@@ -1,3 +1,5 @@
+use core::num;
+
 use crate::r19_11::*;
 
 struct DltHeaderHtyp;
@@ -135,6 +137,7 @@ impl<'a> DltMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
         log_level: MtinTypeDltLog,
+        number_of_arguments: u8,
         payload: &[u8],
         verbose: bool,
     ) -> Result<usize, DltError> {
@@ -183,15 +186,14 @@ impl<'a> DltMessageBuilder<'a> {
 
         // Write Extended Header
         let verbose_bit = if verbose { 0x01 } else { 0x00 };
-        let mtin_bits = (log_level.to_bits() & 0x0F) << 1;
-        let mstp_bits = (MstpType::DltTypeLog.to_bits() & 0x07) << 4;
+        let mtin_bits = (log_level.to_bits() & 0x0F) << 4;
+        let mstp_bits = (MstpType::DltTypeLog.to_bits() & 0x07) << 1;
         let msin = verbose_bit | mtin_bits | mstp_bits;
 
         buffer[offset] = msin;
         offset += 1;
 
-        // NOAR: Number of arguments (0 for simple string payload)
-        buffer[offset] = if verbose { 1 } else { 0 };
+        buffer[offset] = number_of_arguments;
         offset += 1;
 
         // APP ID
@@ -217,9 +219,10 @@ impl<'a> DltMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
         log_level: MtinTypeDltLog,
+        number_of_arguments: u8,
         text: &[u8],
     ) -> Result<usize, DltError> {
-        self.generate_log_message(buffer, log_level, text, false)
+        self.generate_log_message(buffer, log_level, number_of_arguments, text, true)
     }
 
     #[inline]
@@ -227,9 +230,10 @@ impl<'a> DltMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
         log_level: MtinTypeDltLog,
+        number_of_arguments: u8,
         payload: &[u8],
     ) -> Result<usize, DltError> {
-        self.generate_log_message(buffer, log_level, payload, true)
+        self.generate_log_message(buffer, log_level, number_of_arguments, payload, true)
     }
 
     fn standard_header_extra_size(&self) -> usize {

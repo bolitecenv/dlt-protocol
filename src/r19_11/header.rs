@@ -141,25 +141,24 @@ pub enum MtinTypeDltControl {
 impl MtinTypeDltLog {
     pub fn parse(value: u8) -> MtinTypeDltLog {
         match value {
-            0x0 => MtinTypeDltLog::DltLogFatal,
-            0x1 => MtinTypeDltLog::DltLogError,
-            0x2 => MtinTypeDltLog::DltLogWarn,
-            0x3 => MtinTypeDltLog::DltLogInfo,
-            0x4 => MtinTypeDltLog::DltLogDebug,
-            0x5 => MtinTypeDltLog::DltLogVerbose,
-            0x6..=0x7 => MtinTypeDltLog::Reserved(value),
-            _ => MtinTypeDltLog::Invalid(value),
+            0x1 => MtinTypeDltLog::DltLogFatal,
+            0x2 => MtinTypeDltLog::DltLogError,
+            0x3 => MtinTypeDltLog::DltLogWarn,
+            0x4 => MtinTypeDltLog::DltLogInfo,
+            0x5 => MtinTypeDltLog::DltLogDebug,
+            0x6 => MtinTypeDltLog::DltLogVerbose,
+            _ => MtinTypeDltLog::Reserved(value),
         }
     }
 
     pub fn to_bits(&self) -> u8 {
         match self {
-            MtinTypeDltLog::DltLogFatal => 0x0,
-            MtinTypeDltLog::DltLogError => 0x1,
-            MtinTypeDltLog::DltLogWarn => 0x2,
-            MtinTypeDltLog::DltLogInfo => 0x3,
-            MtinTypeDltLog::DltLogDebug => 0x4,
-            MtinTypeDltLog::DltLogVerbose => 0x5,
+            MtinTypeDltLog::DltLogFatal => 0x1,
+            MtinTypeDltLog::DltLogError => 0x2,
+            MtinTypeDltLog::DltLogWarn => 0x3,
+            MtinTypeDltLog::DltLogInfo => 0x4,
+            MtinTypeDltLog::DltLogDebug => 0x5,
+            MtinTypeDltLog::DltLogVerbose => 0x6,
             MtinTypeDltLog::Reserved(v) => *v,
             MtinTypeDltLog::Invalid(v) => *v,
         }
