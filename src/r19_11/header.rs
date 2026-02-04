@@ -17,6 +17,10 @@ pub const WTMS_MASK: u8 = 0x10; // Bit 4: With Timestamp
 pub const VERS_MASK: u8 = 0xE0; // Bit 5-7: Version Number (11100000)
 pub const DLT_VERSION: u8 = 0x10; // Version 1.0 (00010000)
 
+// Serial Header Constants 4 bytes, "DLS" + 0x01 
+pub const DLT_SERIAL_HEADER_SIZE: usize = 4;
+pub const DLT_SERIAL_HEADER_ARRAY: [u8; DLT_SERIAL_HEADER_SIZE] = [0x44, 0x4C, 0x53, 0x01]; // "DLS" + 0x01
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct DltHTYP {
     pub UEH: bool,

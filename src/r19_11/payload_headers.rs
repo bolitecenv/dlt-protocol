@@ -265,7 +265,7 @@ impl<'a> PayloadBuilder<'a> {
         self.write_type_info(PayloadType::String, TypeLength::NotDefined)?;
 
         // Write string length (2 bytes)
-        let len = value.len() as u16;
+        let len = (value.len() as u16) + 1; // +1 for null terminator
         self.write_bytes(&len.to_le_bytes())?;
 
         // Write string data (null-terminated)
@@ -279,11 +279,12 @@ impl<'a> PayloadBuilder<'a> {
         self.write_type_info(PayloadType::Raw, TypeLength::NotDefined)?;
 
         // Write data length (2 bytes)
-        let len = data.len() as u16;
+        let len = (data.len() as u16) + 1; // +1 for null terminator
         self.write_bytes(&len.to_le_bytes())?;
 
         // Write raw data
-        self.write_bytes(data)
+        self.write_bytes(data)?;
+        self.write_bytes(&[0]) // null terminator
     }
 
     /// Add a 128-bit value (generic)

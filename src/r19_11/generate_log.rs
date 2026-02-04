@@ -32,30 +32,20 @@ pub struct DltCommonBuilder {
     pub handlers: DltCommonGetHandler,
 }
 
-// DLT Common Message Builder thread safe, no_std static instance
-// Note: This requires unsafe or once_cell/lazy_static for true static initialization
-// with non-const values. Using const-compatible default here.
-pub static DLT_COMMON_BUILDER: DltCommonBuilder = DltCommonBuilder {
-    settings: DltCommonSettings {
-        endian: DltEndian::Big,
-    },
-    handlers: DltCommonGetHandler {
-        get_timestamp: None,
-        get_session_id: None,
-    },
-};
-
 pub struct DltMessageBuilder<'a> {
     header_htyp: u8,
     message_counter: u8,
+    serial_header: bool,
     ecu_id: &'a [u8; DLT_ID_SIZE],
-    session_id: u32,
-    timestamp: u32,
+    pub session_id: u32,
+    pub timestamp: u32,
     app_id: &'a [u8; DLT_ID_SIZE],
     context_id: &'a [u8; DLT_ID_SIZE],
     endian: DltEndian,
     get_tmsp: Option<fn() -> u32>,
     get_sess_id: Option<fn() -> u32>,
+    timestamp_provider: Option<&'static dyn TimestampProvider>,
+    session_id_provider: Option<&'static dyn SessionIdProvider>,
 }
 
 impl<'a> DltMessageBuilder<'a> {
@@ -79,6 +69,9 @@ impl<'a> DltMessageBuilder<'a> {
             endian: DltEndian::Big,
             get_tmsp: None,
             get_sess_id: None,
+            serial_header: false,
+            timestamp_provider: GLOBAL_TIMESTAMP.get(),
+            session_id_provider: GLOBAL_SESSION.get(),
         }
     }
 
@@ -107,6 +100,29 @@ impl<'a> DltMessageBuilder<'a> {
         self
     }
 
+    pub fn with_session_id(mut self, sess_id: u32) -> Self {
+        self.session_id = sess_id;
+        self
+    }
+
+    pub fn with_timestamp(mut self, timestamp: u32) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
+    pub fn add_serial_header(mut self) -> Self {
+        self.serial_header = true;
+        self
+    }
+
+    pub fn set_timestamp_provider(&mut self, provider: &'static dyn TimestampProvider) {
+        self.timestamp_provider = Some(provider);
+    }
+
+    pub fn set_session_id_provider(&mut self, provider: &'static dyn SessionIdProvider) {
+        self.session_id_provider = Some(provider);
+    }
+
     pub fn increment_counter(&mut self) {
         self.message_counter = self.message_counter.wrapping_add(1);
     }
@@ -131,26 +147,84 @@ impl<'a> DltMessageBuilder<'a> {
         self.get_sess_id = Some(getter);
     }
 
-    /// Generate a DLT log message
-    /// Returns the number of bytes written to the buffer
-    pub fn generate_log_message(
+    pub fn insert_header_at_front(&mut self, buffer: &mut [u8], payload_size: usize, arg_num: u8, log_level: MtinTypeDltLog) -> Result<usize, DltError> {
+        let header_size = self._generate_log_message_header_size();
+        if buffer.len() < header_size {
+            return Err(DltError::BufferTooSmall);
+        }
+
+        let total_size = header_size + payload_size;
+        if buffer.len() < total_size {
+            return Err(DltError::BufferTooSmall);
+        }
+
+        // Move existing payload data to make space for header
+        for i in (0..payload_size).rev() {
+            buffer[i + header_size] = buffer[i];
+        }
+
+        // Insert header at the front of the buffer
+        self._generate_log_message(buffer, payload_size, log_level, arg_num, false)?;
+        
+        Ok(total_size)
+    }
+
+    pub fn generate_log_message_with_payload(
         &mut self,
         buffer: &mut [u8],
+        payload: &[u8],
         log_level: MtinTypeDltLog,
         number_of_arguments: u8,
-        payload: &[u8],
+        verbose: bool,
+    ) -> Result<usize, DltError> {
+        let payload_size = payload.len();
+        let header_size = self._generate_log_message_header_size();
+        let total_size = header_size + payload_size;
+
+        if buffer.len() < total_size {
+            return Err(DltError::BufferTooSmall);
+        }
+
+        // Generate header
+        let header_bytes_written = self._generate_log_message(buffer, payload_size, log_level, number_of_arguments, verbose)?;
+
+        // Copy payload after header
+        buffer[header_bytes_written..header_bytes_written + payload_size]
+            .copy_from_slice(payload);
+
+        Ok(total_size)
+    }
+    
+    /// Generate a DLT log message
+    /// Returns the number of bytes written to the buffer
+    pub fn _generate_log_message(
+        &mut self,
+        buffer: &mut [u8],
+        payload_size: usize,
+        log_level: MtinTypeDltLog,
+        number_of_arguments: u8,
         verbose: bool,
     ) -> Result<usize, DltError> {
         let mut offset = 0;
+        let mut total_len;
 
         // Calculate total message length
-        let mut total_len = DLT_STANDARD_HEADER_SIZE;
-        total_len += self.standard_header_extra_size(); // ECU ID + Session ID + Timestamp
-        total_len += DLT_EXTENDED_HEADER_SIZE;
-        total_len += payload.len();
+        if self.serial_header {
+            total_len = DLT_SERIAL_HEADER_SIZE;
+        } else {
+            total_len = 0;
+        }
+        total_len += self._generate_log_message_header_size();
+        total_len += payload_size;
 
         if buffer.len() < total_len {
             return Err(DltError::BufferTooSmall);
+        }
+
+        // Write Serial Header if enabled
+        if self.serial_header {
+            buffer[offset..offset + DLT_SERIAL_HEADER_SIZE].copy_from_slice(&DLT_SERIAL_HEADER_ARRAY);
+            offset += DLT_SERIAL_HEADER_SIZE;
         }
 
         // Write Standard Header
@@ -169,12 +243,13 @@ impl<'a> DltMessageBuilder<'a> {
         offset += DLT_ID_SIZE;
 
         // If session ID getter is provided, use it
-        if let Some(get_sess_id) = self.get_sess_id {
-            self.session_id = get_sess_id();
+        if let Some(provider) = &self.session_id_provider {
+            self.session_id = provider.get_session_id();
         }
+
         // If timestamp getter is provided, use it
-        if let Some(get_tmsp) = self.get_tmsp {
-            self.timestamp = get_tmsp();
+        if let Some(provider) = &self.timestamp_provider {
+            self.timestamp = provider.get_timestamp();
         }
 
         buffer[offset..offset + 4]
@@ -204,39 +279,13 @@ impl<'a> DltMessageBuilder<'a> {
         buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.context_id);
         offset += DLT_ID_SIZE;
 
-        // Write Payload
-        buffer[offset..offset + payload.len()].copy_from_slice(payload);
-        offset += payload.len();
-
         // Increment message counter for next message
         self.increment_counter();
 
         Ok(offset)
     }
 
-    #[inline]
-    pub fn log_text(
-        &mut self,
-        buffer: &mut [u8],
-        log_level: MtinTypeDltLog,
-        number_of_arguments: u8,
-        text: &[u8],
-    ) -> Result<usize, DltError> {
-        self.generate_log_message(buffer, log_level, number_of_arguments, text, true)
-    }
-
-    #[inline]
-    pub fn log_verbose(
-        &mut self,
-        buffer: &mut [u8],
-        log_level: MtinTypeDltLog,
-        number_of_arguments: u8,
-        payload: &[u8],
-    ) -> Result<usize, DltError> {
-        self.generate_log_message(buffer, log_level, number_of_arguments, payload, true)
-    }
-
-    fn standard_header_extra_size(&self) -> usize {
+    fn _standard_header_extra_size(&self) -> usize {
         let mut size = 0;
         if self.header_htyp & DltHeaderHtyp::WEID_MASK != 0 {
             size += DLT_ID_SIZE; // ECU ID
@@ -248,6 +297,22 @@ impl<'a> DltMessageBuilder<'a> {
             size += 4; // Timestamp
         }
         size
+    }
+
+    fn _generate_log_message_header_size(&self) -> usize {
+        let mut total_len;
+
+        // Calculate total message length
+        if self.serial_header {
+            total_len = DLT_SERIAL_HEADER_SIZE;
+        } else {
+            total_len = 0;
+        }
+        total_len += DLT_STANDARD_HEADER_SIZE;
+        total_len += self._standard_header_extra_size(); // ECU ID + Session ID + Timestamp
+        total_len += DLT_EXTENDED_HEADER_SIZE;
+
+        total_len
     }
 }
 
