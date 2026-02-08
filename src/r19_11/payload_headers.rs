@@ -187,74 +187,97 @@ impl<'a> PayloadBuilder<'a> {
         payload_type: PayloadType,
         type_length: TypeLength,
     ) -> Result<(), PayloadError> {
-        let type_info = (type_length as u32) | payload_type.to_bit();
-        self.write_bytes(&type_info.to_le_bytes())
+        let type_info: u32 = (type_length as u32) | payload_type.to_bit();
+        self.write_bytes(&type_info.to_le_bytes())?;
+        Ok(())
     }
 
     /// Add a boolean value (8 bit)
     pub fn add_bool(&mut self, value: bool) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Bool, TypeLength::Bit8)?;
-        self.write_bytes(&[value as u8])
+        self.write_bytes(&[value as u8])?;
+        self.position += 1;
+        Ok(())
     }
 
     /// Add a signed 8-bit integer
     pub fn add_i8(&mut self, value: i8) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Signed, TypeLength::Bit8)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 1;
+        Ok(())
     }
 
     /// Add a signed 16-bit integer
     pub fn add_i16(&mut self, value: i16) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Signed, TypeLength::Bit16)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 2;
+        Ok(())
     }
 
     /// Add a signed 32-bit integer
     pub fn add_i32(&mut self, value: i32) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Signed, TypeLength::Bit32)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 4;
+        Ok(())
     }
 
     /// Add a signed 64-bit integer
     pub fn add_i64(&mut self, value: i64) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Signed, TypeLength::Bit64)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 8;
+        Ok(())
     }
 
     /// Add an unsigned 8-bit integer
     pub fn add_u8(&mut self, value: u8) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Unsigned, TypeLength::Bit8)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 1;
+        Ok(())
     }
 
     /// Add an unsigned 16-bit integer
     pub fn add_u16(&mut self, value: u16) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Unsigned, TypeLength::Bit16)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 2;
+        Ok(())
     }
 
     /// Add an unsigned 32-bit integer
     pub fn add_u32(&mut self, value: u32) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Unsigned, TypeLength::Bit32)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 4;
+        Ok(())
     }
 
     /// Add an unsigned 64-bit integer
     pub fn add_u64(&mut self, value: u64) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Unsigned, TypeLength::Bit64)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 8;
+        Ok(())
     }
 
     /// Add a 32-bit float
     pub fn add_f32(&mut self, value: f32) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Float, TypeLength::Bit32)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 4;
+        Ok(())
     }
 
     /// Add a 64-bit float
     pub fn add_f64(&mut self, value: f64) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Float, TypeLength::Bit64)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 8;
+        Ok(())
     }
 
     /// Add a string
@@ -270,7 +293,8 @@ impl<'a> PayloadBuilder<'a> {
 
         // Write string data (null-terminated)
         self.write_bytes(value.as_bytes())?;
-        self.write_bytes(&[0]) // null terminator
+        self.write_bytes(&[0])?; // null terminator
+        Ok(())
     }
 
     /// Add raw bytes
@@ -284,13 +308,16 @@ impl<'a> PayloadBuilder<'a> {
 
         // Write raw data
         self.write_bytes(data)?;
-        self.write_bytes(&[0]) // null terminator
+        self.write_bytes(&[0])?; // null terminator
+        Ok(())
     }
 
     /// Add a 128-bit value (generic)
     pub fn add_u128(&mut self, value: u128) -> Result<(), PayloadError> {
         self.write_type_info(PayloadType::Unsigned, TypeLength::Bit128)?;
-        self.write_bytes(&value.to_le_bytes())
+        self.write_bytes(&value.to_le_bytes())?;
+        self.position += 16;
+        Ok(())
     }
 }
 
