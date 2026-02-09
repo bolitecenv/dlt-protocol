@@ -149,18 +149,21 @@ impl<'a> DltMessageBuilder<'a> {
 
     pub fn insert_header_at_front(&mut self, buffer: &mut [u8], payload_size: usize, arg_num: u8, log_level: MtinTypeDltLog) -> Result<usize, DltError> {
         let header_size = self._generate_log_message_header_size();
-        if buffer.len() < header_size {
+        let serial_size = if self.serial_header { DLT_SERIAL_HEADER_SIZE } else { 0 };
+        let total_header_size = serial_size + header_size;
+        
+        if buffer.len() < total_header_size {
             return Err(DltError::BufferTooSmall);
         }
 
-        let total_size = header_size + payload_size;
+        let total_size = total_header_size + payload_size;
         if buffer.len() < total_size {
             return Err(DltError::BufferTooSmall);
         }
 
-        // Move existing payload data to make space for header
+        // Move existing payload data to make space for header (serial + standard + extra + extended)
         for i in (0..payload_size).rev() {
-            buffer[i + header_size] = buffer[i];
+            buffer[i + total_header_size] = buffer[i];
         }
 
         // Insert header at the front of the buffer
@@ -179,7 +182,8 @@ impl<'a> DltMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let payload_size = payload.len();
         let header_size = self._generate_log_message_header_size();
-        let total_size = header_size + payload_size;
+        let serial_size = if self.serial_header { DLT_SERIAL_HEADER_SIZE } else { 0 };
+        let total_size = serial_size + header_size + payload_size;
 
         if buffer.len() < total_size {
             return Err(DltError::BufferTooSmall);
@@ -207,6 +211,7 @@ impl<'a> DltMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut offset = 0;
         let mut total_len;
+        let len_field; // Length field value (excludes serial header)
 
         // Calculate total message length
         if self.serial_header {
@@ -216,6 +221,9 @@ impl<'a> DltMessageBuilder<'a> {
         }
         total_len += self._generate_log_message_header_size();
         total_len += payload_size;
+        
+        // Length field excludes serial header
+        len_field = (total_len - if self.serial_header { DLT_SERIAL_HEADER_SIZE } else { 0 }) as u16;
 
         if buffer.len() < total_len {
             return Err(DltError::BufferTooSmall);
@@ -228,36 +236,51 @@ impl<'a> DltMessageBuilder<'a> {
         }
 
         // Write Standard Header
-        buffer[offset] = self.header_htyp;
+        // Update MSBF bit based on endianness
+        let mut htyp = self.header_htyp;
+        match self.endian {
+            DltEndian::Big => htyp |= DltHeaderHtyp::MSBF_MASK,
+            DltEndian::Little => htyp &= !DltHeaderHtyp::MSBF_MASK,
+        }
+        buffer[offset] = htyp;
         offset += 1;
         buffer[offset] = self.message_counter;
         offset += 1;
 
-        // Write length
-        let len = total_len as u16;
-        buffer[offset..offset + 2].copy_from_slice(&switch_endian_u16(len, &self.endian));
+        // Write length (excludes serial header)
+        // Per DLT spec PRS_Dlt_00091: Standard header uses network byte order (big-endian)
+        buffer[offset..offset + 2].copy_from_slice(&len_field.to_be_bytes());
         offset += 2;
 
-        // Write Standard Header Extra
-        buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.ecu_id);
-        offset += DLT_ID_SIZE;
-
-        // If session ID getter is provided, use it
-        if let Some(provider) = &self.session_id_provider {
-            self.session_id = provider.get_session_id();
+        // Write Standard Header Extra fields (conditional based on HTYP flags)
+        
+        // ECU ID (if WEID bit is set)
+        if self.header_htyp & DltHeaderHtyp::WEID_MASK != 0 {
+            buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.ecu_id);
+            offset += DLT_ID_SIZE;
         }
 
-        // If timestamp getter is provided, use it
-        if let Some(provider) = &self.timestamp_provider {
-            self.timestamp = provider.get_timestamp();
+        // Session ID (if WSID bit is set)
+        if self.header_htyp & DltHeaderHtyp::WSID_MASK != 0 {
+            // If session ID getter is provided, use it
+            if let Some(provider) = &self.session_id_provider {
+                self.session_id = provider.get_session_id();
+            }
+            buffer[offset..offset + 4]
+                .copy_from_slice(&switch_endian_u32(self.session_id, &self.endian));
+            offset += 4;
         }
 
-        buffer[offset..offset + 4]
-            .copy_from_slice(&switch_endian_u32(self.session_id, &self.endian));
-        offset += 4;
-        buffer[offset..offset + 4]
-            .copy_from_slice(&switch_endian_u32(self.timestamp, &self.endian));
-        offset += 4;
+        // Timestamp (if WTMS bit is set)
+        if self.header_htyp & DltHeaderHtyp::WTMS_MASK != 0 {
+            // If timestamp getter is provided, use it
+            if let Some(provider) = &self.timestamp_provider {
+                self.timestamp = provider.get_timestamp();
+            }
+            buffer[offset..offset + 4]
+                .copy_from_slice(&switch_endian_u32(self.timestamp, &self.endian));
+            offset += 4;
+        }
 
         // Write Extended Header
         let verbose_bit = if verbose { 0x01 } else { 0x00 };
@@ -300,14 +323,9 @@ impl<'a> DltMessageBuilder<'a> {
     }
 
     fn _generate_log_message_header_size(&self) -> usize {
-        let mut total_len;
+        let mut total_len = 0;
 
-        // Calculate total message length
-        if self.serial_header {
-            total_len = DLT_SERIAL_HEADER_SIZE;
-        } else {
-            total_len = 0;
-        }
+        // This function returns header size WITHOUT serial header
         total_len += DLT_STANDARD_HEADER_SIZE;
         total_len += self._standard_header_extra_size(); // ECU ID + Session ID + Timestamp
         total_len += DLT_EXTENDED_HEADER_SIZE;

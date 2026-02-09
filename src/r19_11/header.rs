@@ -65,7 +65,7 @@ pub enum DltLogLevel {
     Invalid(u8),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MstpType {
     DltTypeLog,
     DltTypeAppTrace,
@@ -203,3 +203,289 @@ impl Mtin {
         }
     }
 }
+
+// ========================================
+// DLT Header Parser
+// ========================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DltHeaderError {
+    BufferTooSmall,
+    InvalidVersion,
+    InvalidSerialHeader,
+    InvalidHeaderType,
+}
+
+/// Parsed DLT message with all header information
+#[derive(Debug, Clone, Copy)]
+pub struct DltMessage<'a> {
+    pub has_serial_header: bool,
+    pub standard_header: DltStandardHeader,
+    pub header_type: DltHTYP,
+    pub ecu_id: Option<[u8; DLT_ID_SIZE]>,
+    pub session_id: Option<u32>,
+    pub timestamp: Option<u32>,
+    pub extended_header: Option<DltExtendedHeader>,
+    pub payload: &'a [u8],
+}
+
+/// DLT Header Parser for parsing incoming packets
+pub struct DltHeaderParser<'a> {
+    data: &'a [u8],
+    position: usize,
+}
+
+impl<'a> DltHeaderParser<'a> {
+    /// Create a new header parser from raw packet data
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, position: 0 }
+    }
+
+    /// Parse a complete DLT message including all headers
+    pub fn parse_message(&mut self) -> Result<DltMessage<'a>, DltHeaderError> {
+        let start_position = self.position;
+        
+        // Check for optional serial header
+        let has_serial = self.check_serial_header();
+        if has_serial {
+            self.skip_serial_header()?;
+        }
+
+        // Parse standard header (required)
+        let standard_header = self.parse_standard_header()?;
+        let header_type = Self::decode_htyp(standard_header.htyp);
+
+        // Parse standard header extra fields (optional)
+        let (ecu_id, session_id, timestamp) = self.parse_standard_header_extra(&header_type)?;
+
+        // Parse extended header (optional)
+        let extended_header = if header_type.UEH {
+            Some(self.parse_extended_header()?)
+        } else {
+            None
+        };
+
+        // Calculate payload offset and extract payload
+        // The 'len' field in standard header includes everything from standard header to end of payload
+        // It does NOT include the serial header
+        let total_len = standard_header.len as usize;
+        
+        // Calculate how many header bytes we've consumed (excluding serial header)
+        let header_bytes_consumed = if has_serial {
+            self.position - start_position - DLT_SERIAL_HEADER_SIZE
+        } else {
+            self.position - start_position
+        };
+        
+        // Payload length = total_len - header_bytes_consumed
+        let payload_len = total_len.saturating_sub(header_bytes_consumed);
+        let payload_start = self.position;
+        let payload_end = payload_start + payload_len;
+        
+        if payload_end > self.data.len() {
+            return Err(DltHeaderError::BufferTooSmall);
+        }
+        
+        let payload = &self.data[payload_start..payload_end];
+        self.position = payload_end;
+        
+        Ok(DltMessage {
+            has_serial_header: has_serial,
+            standard_header,
+            header_type,
+            ecu_id,
+            session_id,
+            timestamp,
+            extended_header,
+            payload,
+        })
+    }
+
+    /// Check if the buffer starts with a serial header
+    fn check_serial_header(&self) -> bool {
+        if self.position + DLT_SERIAL_HEADER_SIZE > self.data.len() {
+            return false;
+        }
+        &self.data[self.position..self.position + DLT_SERIAL_HEADER_SIZE] == &DLT_SERIAL_HEADER_ARRAY
+    }
+
+    /// Skip the serial header
+    fn skip_serial_header(&mut self) -> Result<(), DltHeaderError> {
+        if self.position + DLT_SERIAL_HEADER_SIZE > self.data.len() {
+            return Err(DltHeaderError::BufferTooSmall);
+        }
+        self.position += DLT_SERIAL_HEADER_SIZE;
+        Ok(())
+    }
+
+    /// Parse the standard header (4 bytes)
+    fn parse_standard_header(&mut self) -> Result<DltStandardHeader, DltHeaderError> {
+        if self.position + DLT_STANDARD_HEADER_SIZE > self.data.len() {
+            return Err(DltHeaderError::BufferTooSmall);
+        }
+
+        let htyp = self.data[self.position];
+        let mcnt = self.data[self.position + 1];
+        
+        // Check version
+        let version = (htyp & VERS_MASK) >> 5;
+        if version != 1 {
+            return Err(DltHeaderError::InvalidVersion);
+        }
+
+        // Per DLT spec PRS_Dlt_00091: Standard header uses network byte order (big-endian)
+        // regardless of MSBF flag. The MSBF flag only affects payload and extended header.
+        let len = u16::from_be_bytes([self.data[self.position + 2], self.data[self.position + 3]]);
+
+        self.position += DLT_STANDARD_HEADER_SIZE;
+
+        Ok(DltStandardHeader { htyp, mcnt, len })
+    }
+
+    /// Decode HTYP byte into structured format
+    fn decode_htyp(htyp: u8) -> DltHTYP {
+        DltHTYP {
+            UEH: (htyp & UEH_MASK) != 0,
+            MSBF: (htyp & MSBF_MASK) != 0,
+            WEID: (htyp & WEID_MASK) != 0,
+            WSID: (htyp & WSID_MASK) != 0,
+            WTMS: (htyp & WTMS_MASK) != 0,
+            VERS: (htyp & VERS_MASK) >> 5,
+        }
+    }
+
+    /// Parse standard header extra fields (ECU ID, Session ID, Timestamp)
+    fn parse_standard_header_extra(
+        &mut self,
+        header_type: &DltHTYP,
+    ) -> Result<(Option<[u8; DLT_ID_SIZE]>, Option<u32>, Option<u32>), DltHeaderError> {
+        let mut ecu_id = None;
+        let mut session_id = None;
+        let mut timestamp = None;
+
+        // ECU ID (4 bytes)
+        if header_type.WEID {
+            if self.position + DLT_ID_SIZE > self.data.len() {
+                return Err(DltHeaderError::BufferTooSmall);
+            }
+            let mut ecu = [0u8; DLT_ID_SIZE];
+            ecu.copy_from_slice(&self.data[self.position..self.position + DLT_ID_SIZE]);
+            ecu_id = Some(ecu);
+            self.position += DLT_ID_SIZE;
+        }
+
+        // Session ID (4 bytes)
+        if header_type.WSID {
+            if self.position + 4 > self.data.len() {
+                return Err(DltHeaderError::BufferTooSmall);
+            }
+            let seid = if header_type.MSBF {
+                u32::from_be_bytes([
+                    self.data[self.position],
+                    self.data[self.position + 1],
+                    self.data[self.position + 2],
+                    self.data[self.position + 3],
+                ])
+            } else {
+                u32::from_le_bytes([
+                    self.data[self.position],
+                    self.data[self.position + 1],
+                    self.data[self.position + 2],
+                    self.data[self.position + 3],
+                ])
+            };
+            session_id = Some(seid);
+            self.position += 4;
+        }
+
+        // Timestamp (4 bytes)
+        if header_type.WTMS {
+            if self.position + 4 > self.data.len() {
+                return Err(DltHeaderError::BufferTooSmall);
+            }
+            let tmsp = if header_type.MSBF {
+                u32::from_be_bytes([
+                    self.data[self.position],
+                    self.data[self.position + 1],
+                    self.data[self.position + 2],
+                    self.data[self.position + 3],
+                ])
+            } else {
+                u32::from_le_bytes([
+                    self.data[self.position],
+                    self.data[self.position + 1],
+                    self.data[self.position + 2],
+                    self.data[self.position + 3],
+                ])
+            };
+            timestamp = Some(tmsp);
+            self.position += 4;
+        }
+
+        Ok((ecu_id, session_id, timestamp))
+    }
+
+    /// Parse extended header (10 bytes)
+    fn parse_extended_header(&mut self) -> Result<DltExtendedHeader, DltHeaderError> {
+        if self.position + DLT_EXTENDED_HEADER_SIZE > self.data.len() {
+            return Err(DltHeaderError::BufferTooSmall);
+        }
+
+        let msin = self.data[self.position];
+        let noar = self.data[self.position + 1];
+
+        let mut apid = [0u8; DLT_ID_SIZE];
+        apid.copy_from_slice(&self.data[self.position + 2..self.position + 6]);
+
+        let mut ctid = [0u8; DLT_ID_SIZE];
+        ctid.copy_from_slice(&self.data[self.position + 6..self.position + 10]);
+
+        self.position += DLT_EXTENDED_HEADER_SIZE;
+
+        Ok(DltExtendedHeader {
+            msin,
+            noar,
+            apid,
+            ctid,
+        })
+    }
+
+    /// Get current parsing position
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    /// Get remaining unparsed data
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.position)
+    }
+}
+
+/// Helper functions for interpreting parsed headers
+impl DltExtendedHeader {
+    /// Check if message is verbose mode
+    pub fn is_verbose(&self) -> bool {
+        (self.msin & 0x01) != 0
+    }
+
+    /// Get message type (MSTP)
+    pub fn message_type(&self) -> MstpType {
+        let mstp_bits = (self.msin >> 1) & 0x07;
+        MstpType::parse(mstp_bits)
+    }
+
+    /// Get message type info (MTIN) - log level, trace type, etc.
+    pub fn message_type_info(&self) -> u8 {
+        (self.msin >> 4) & 0x0F
+    }
+
+    /// Get log level (if message type is Log)
+    pub fn log_level(&self) -> Option<MtinTypeDltLog> {
+        if matches!(self.message_type(), MstpType::DltTypeLog) {
+            Some(MtinTypeDltLog::parse(self.message_type_info()))
+        } else {
+            None
+        }
+    }
+}
+
