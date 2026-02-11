@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLT Protocol WASM Test</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 { color: #4ec9b0; }
+        .status { 
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .success { background: #1e3a1e; border-left: 4px solid #4ec9b0; }
+        .error { background: #3a1e1e; border-left: 4px solid #f48771; }
+        .info { background: #1e2a3a; border-left: 4px solid #569cd6; }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover { background: #1177bb; }
+        pre {
+            background: #2d2d2d;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            border: 1px solid #444;
+        }
+        .hex-output { 
+            color: #ce9178;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🦀 DLT Protocol WASM Test</h1>
+    
+    <div id="status" class="status info">
+        Loading WASM module...
+    </div>
+
+    <div id="controls" style="display: none;">
+        <h2>🔨 Create Messages</h2>
+        <button onclick="testDltMessage()">Create DLT Message</button>
+        <button onclick="testVersion()">Check Version</button>
+        <button onclick="resetMemory()">Reset Memory</button>
+        
+        <h2>🔍 Analyze Messages</h2>
+        <button onclick="analyzeLastMessage()">Analyze Last Message</button>
+    </div>
+
+    <div id="output"></div>
+
+    <script>
+        let wasmModule;
+        let wasmMemory;
+        let lastMessagePtr = 0;
+        let lastMessageSize = 0;
+
+        async function loadWasm() {
+            try {
+                updateStatus('info', '⏳ Fetching WASM file...');
+                
+                // Load the WASM module
+                const response = await fetch('../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                updateStatus('info', '⏳ Compiling WASM module...');
+                const buffer = await response.arrayBuffer();
+                
+                updateStatus('info', '⏳ Instantiating WASM...');
+                // Instantiate WASM with memory
+                const result = await WebAssembly.instantiate(buffer, {});
+                wasmModule = result.instance.exports;
+                wasmMemory = wasmModule.memory;
+
+                updateStatus('success', '✅ WASM module loaded successfully!');
+                document.getElementById('controls').style.display = 'block';
+                
+                // Auto-run version test
+                testVersion();
+            } catch (error) {
+                updateStatus('error', `❌ Failed to load WASM: ${error.message}`);
+                console.error('WASM Load Error:', error);
+            }
+        }
+
+        function updateStatus(type, message) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        function addOutput(html) {
+            const output = document.getElementById('output');
+            output.innerHTML += html;
+        }
+
+        function testVersion() {
+            try {
+                const version = wasmModule.get_version();
+                addOutput(`
+                    <div class="status success">
+                        <strong>Version Test:</strong><br>
+                        Library version: ${Math.floor(version / 100)}.${(version % 100) / 10}.${version % 10}
+                    </div>
+                `);
+            } catch (error) {
+                addOutput(`
+                    <div class="status error">
+                        <strong>Version Test Failed:</strong> ${error.message}
+                    </div>
+                `);
+            }
+        }
+
+        function testDltMessage() {
+            try {
+                // Reset allocator and allocate buffer
+                wasmModule.reset_allocator();
+                const bufferSize = 256;
+                const bufferPtr = wasmModule.allocate(bufferSize);
+                
+                if (bufferPtr === 0) {
+                    throw new Error('Failed to allocate memory');
+                }
+
+                // Create DLT message
+                const messageSize = wasmModule.create_dlt_message(bufferPtr, bufferSize);
+                
+                if (messageSize === 0) {
+                    throw new Error('Failed to create DLT message');
+                }
+
+                // Save for analysis
+                lastMessagePtr = bufferPtr;
+                lastMessageSize = messageSize;
+
+                // Read the message from WASM memory
+                const memory = new Uint8Array(wasmMemory.buffer);
+                const message = memory.slice(bufferPtr, bufferPtr + messageSize);
+                
+                // Convert to hex string
+                const hexString = Array.from(message)
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join(' ');
+
+                // Format output with breakdown
+                const serialHeader = hexString.substring(0, 11); // 4 bytes
+                const restOfMessage = hexString.substring(12);
+
+                addOutput(`
+                    <div class="status success">
+                        <strong>DLT Message Created:</strong><br>
+                        Size: ${messageSize} bytes<br>
+                        <pre class="hex-output">Serial Header: ${serialHeader}
+Rest of Message: ${restOfMessage}</pre>
+                        <small>ECU: WASM, App: TEST, Context: DEMO, Payload: "Hello from WASM!"</small>
+                    </div>
+                `);
+            } catch (error) {
+                addOutput(`
+                    <div class="status error">
+                        <strong>DLT Message Test Failed:</strong> ${error.message}
+                    </div>
+                `);
+                console.error(error);
+            }
+        }
+
+        function resetMemory() {
+            wasmModule.reset_allocator();
+            lastMessagePtr = 0;
+            lastMessageSize = 0;
+            addOutput(`
+                <div class="status info">
+                    <strong>Memory Reset:</strong> Allocator position reset to 0
+                </div>
+            `);
+        }
+
+        function analyzeLastMessage() {
+            if (lastMessagePtr === 0 || lastMessageSize === 0) {
+                addOutput(`
+                    <div class="status error">
+                        <strong>Analysis Failed:</strong> No message to analyze. Create a message first.
+                    </div>
+                `);
+                return;
+            }
+
+            try {
+                const resultPtr = wasmModule.analyze_dlt_message(lastMessagePtr, lastMessageSize);
+                
+                if (resultPtr === 0) {
+                    throw new Error('Analysis returned null pointer');
+                }
+
+                // Read result structure from memory (32 bytes)
+                const memory = new Uint8Array(wasmMemory.buffer);
+                const dataView = new DataView(wasmMemory.buffer);
+                
+                // Layout: [total_len(u16)][header_len(u16)][payload_len(u16)][payload_offset(u16)]
+                //         [msg_type(u8)][log_level(u8)][has_serial(u8)][has_ecu(u8)]
+                //         [ecu_id(4)][app_id(4)][ctx_id(4)][reserved(8)]
+                const totalLen = dataView.getUint16(resultPtr, true);
+                const headerLen = dataView.getUint16(resultPtr + 2, true);
+                const payloadLen = dataView.getUint16(resultPtr + 4, true);
+                const payloadOffset = dataView.getUint16(resultPtr + 6, true);
+                const msgType = memory[resultPtr + 8];
+                const logLevel = memory[resultPtr + 9];
+                const hasSerial = memory[resultPtr + 10];
+                const hasEcu = memory[resultPtr + 11];
+                
+                const ecuId = bytesToString(memory.slice(resultPtr + 12, resultPtr + 16));
+                const appId = bytesToString(memory.slice(resultPtr + 16, resultPtr + 20));
+                const ctxId = bytesToString(memory.slice(resultPtr + 20, resultPtr + 24));
+                
+                // Try to format verbose payload
+                let payloadText = '';
+                if (payloadLen > 0) {
+                    const formattedLen = wasmModule.format_verbose_payload(lastMessagePtr, lastMessageSize, payloadOffset, payloadLen);
+                    
+                    if (formattedLen > 0) {
+                        const formattedPtr = wasmModule.get_formatted_payload_ptr();
+                        const formatted = memory.slice(formattedPtr, formattedPtr + formattedLen);
+                        payloadText = new TextDecoder().decode(formatted);
+                    } else {
+                        // Fallback to raw text extraction
+                        const payload = memory.slice(payloadOffset, payloadOffset + payloadLen);
+                        payloadText = String.fromCharCode(...payload.filter(b => b >= 32 && b < 127));
+                    }
+                }
+                
+                // Log level names
+                const logLevelNames = ['Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose'];
+                const logLevelName = logLevel <= 5 ? logLevelNames[logLevel] : 'Unknown';
+
+                addOutput(`
+                    <div class="status success">
+                        <strong>📊 Complete Message Analysis:</strong><br>
+                        <pre><strong>Structure:</strong>
+Total Length:    ${totalLen} bytes
+Header Length:   ${headerLen} bytes
+Payload Length:  ${payloadLen} bytes
+Serial Header:   ${hasSerial ? 'Yes' : 'No'}
+
+<strong>Identification:</strong>
+ECU ID:          "${ecuId}"
+App ID:          "${appId}"
+Context ID:      "${ctxId}"
+
+<strong>Message Info:</strong>
+Log Level:       ${logLevelName} (${logLevel})
+Message Type:    0x${msgType.toString(16).padStart(2, '0')}
+
+<strong>Payload:</strong>
+"${payloadText}"</pre>
+                    </div>
+                `);
+            } catch (error) {
+                addOutput(`
+                    <div class="status error">
+                        <strong>Analysis Failed:</strong> ${error.message}
+                    </div>
+                `);
+                console.error('Analysis Error:', error);
+            }
+        }
+
+        function showMessageDetails() {
+            if (lastMessagePtr === 0 || lastMessageSize === 0) {
+                addOutput(`
+                    <div class="status error">
+                        <strong>Details Failed:</strong> No message to show. Create a message first.
+                    </div>
+                `);
+                return;
+            }
+
+            try {
+const ecuId = wasmModule.get_ecu_id(lastMessagePtr, lastMessageSize);
+const appId = wasmModule.get_app_id(lastMessagePtr, lastMessageSize);
+const ctxId = wasmModule.get_context_id(lastMessagePtr, lastMessageSize);
+
+// Get header length from analysis
+const analysisPtr = wasmModule.analyze_dlt_message(lastMessagePtr, lastMessageSize);
+if (analysisPtr === 0) {
+    throw new Error('Failed to analyze message');
+}
+
+const dataView = new DataView(wasmMemory.buffer);
+const headerLen = dataView.getUint16(analysisPtr + 2, true);
+const payloadLen = dataView.getUint16(analysisPtr + 4, true);
+
+// Get payload
+const memory = new Uint8Array(wasmMemory.buffer);
+const message = memory.slice(lastMessagePtr, lastMessagePtr + lastMessageSize);
+                
+                let payloadStr = '';
+                if (payloadLen > 0 && headerLen + payloadLen <= lastMessageSize) {
+                    const payload = message.slice(headerLen, headerLen + payloadLen);
+                    payloadStr = String.fromCharCode(...payload.filter(b => b >= 32 && b < 127));
+                }
+
+                addOutput(`
+                    <div class="status success">
+                        <strong>🏷️ Message Details:</strong><br>
+                        <pre>ECU ID:      "${ecuStr}"
+App ID:      "${appStr}"
+Context ID:  "${ctxStr}"
+Payload:     "${payloadStr}"</pre>
+                    </div>
+                `);
+            } catch (error) {
+                addOutput(`
+                    <div class="status error">
+                        <strong>Details Failed:</strong> ${error.message}
+                    </div>
+                `);
+            }
+        }
+
+        function u32ToAscii(value) {
+            if (value === 0) return '(none)';
+            const bytes = [
+                (value >> 24) & 0xFF,
+                (value >> 16) & 0xFF,
+                (value >> 8) & 0xFF,
+                value & 0xFF
+            ];
+            return String.fromCharCode(...bytes.filter(b => b !== 0));
+        }
+        function bytesToString(bytes) {
+            return String.fromCharCode(...bytes.filter(b => b !== 0));
+        }
+        // Load WASM when page loads
+        loadWasm();
+    </script>
+</body>
+</html>

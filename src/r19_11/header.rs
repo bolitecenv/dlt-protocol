@@ -1,5 +1,3 @@
-#![no_std]
-
 pub const DLT_ID_SIZE: usize = 4;
 
 pub const DLT_STORAGE_HEADER_SIZE: usize = 16;

@@ -1,5 +1,3 @@
-use core::num;
-
 use crate::r19_11::*;
 
 struct DltHeaderHtyp;
