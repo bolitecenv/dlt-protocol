@@ -1,0 +1,20 @@
+🚀 DLT WebSocket Bridge (Raw Passthrough)
+📡 DLT: localhost:3490
+🌐 WebSocket: ws://localhost:8765
+🔌 Connecting to dlt-daemon at localhost:3490...
+✅ Running on port 8765
+✅ Connected to dlt-daemon!
+Traceback (most recent call last):
+  File "/Users/sentama/Development/tama/rust/dlt-protocol/examples/dlt_websocket_bridge.py", line 101, in <module>
+    asyncio.run(main())
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/asyncio/runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/asyncio/base_events.py", line 642, in run_until_complete
+    return future.result()
+  File "/Users/sentama/Development/tama/rust/dlt-protocol/examples/dlt_websocket_bridge.py", line 94, in main
+    await asyncio.gather(dlt_task, broadcast_task)
+  File "/Users/sentama/Development/tama/rust/dlt-protocol/examples/dlt_websocket_bridge.py", line 52, in broadcast_messages
+    data = await message_queue.get()
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/asyncio/queues.py", line 166, in get
+    await getter
+RuntimeError: Task <Task pending name='Task-3' coro=<broadcast_messages() running at /Users/sentama/Development/tama/rust/dlt-protocol/examples/dlt_websocket_bridge.py:52>> got Future <Future pending> attached to a different loop

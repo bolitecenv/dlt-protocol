@@ -214,8 +214,10 @@ Rest of Message: ${restOfMessage}</pre>
                 }
 
                 // Read result structure from memory (32 bytes)
-                const memory = new Uint8Array(wasmMemory.buffer);
-                const dataView = new DataView(wasmMemory.buffer);
+                // IMPORTANT: Always get fresh buffer reference after WASM calls
+                const buffer = wasmModule.memory.buffer;
+                const memory = new Uint8Array(buffer);
+                const dataView = new DataView(buffer);
                 
                 // Layout: [total_len(u16)][header_len(u16)][payload_len(u16)][payload_offset(u16)]
                 //         [msg_type(u8)][log_level(u8)][has_serial(u8)][has_ecu(u8)]
@@ -240,12 +242,15 @@ Rest of Message: ${restOfMessage}</pre>
                     
                     if (formattedLen > 0) {
                         const formattedPtr = wasmModule.get_formatted_payload_ptr();
-                        const formatted = memory.slice(formattedPtr, formattedPtr + formattedLen);
+                        // Get fresh buffer reference after WASM call
+                        const freshBuffer = wasmModule.memory.buffer;
+                        const freshMemory = new Uint8Array(freshBuffer);
+                        const formatted = freshMemory.slice(formattedPtr, formattedPtr + formattedLen);
                         payloadText = new TextDecoder().decode(formatted);
                     } else {
-                        // Fallback to raw text extraction
-                        const payload = memory.slice(payloadOffset, payloadOffset + payloadLen);
-                        payloadText = String.fromCharCode(...payload.filter(b => b >= 32 && b < 127));
+                        // Fallback to raw text extraction (payloadOffset is absolute in message buffer)
+                        const payload = memory.slice(lastMessagePtr + payloadOffset, lastMessagePtr + payloadOffset + payloadLen);
+                        payloadText = new TextDecoder().decode(payload);
                     }
                 }
                 

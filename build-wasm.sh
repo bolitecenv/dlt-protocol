@@ -6,7 +6,7 @@ set -e
 echo "🦀 Building DLT Protocol for WASM..."
 
 # Build the WASM demo example
-cargo build --target wasm32-unknown-unknown --example wasm_demo --release
+cargo build --target wasm32-unknown-unknown --example wasm_demo --release --features std
 
 echo "✅ WASM build complete!"
 echo ""

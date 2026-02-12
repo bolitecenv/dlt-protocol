@@ -1,5 +1,13 @@
-#![no_std]
+#![cfg_attr(not(target_arch = "wasm32"), no_std)]
 #![no_main]
+
+#[cfg(target_arch = "wasm32")]
+extern crate std;
+
+#[cfg(target_arch = "wasm32")]
+use std::vec::Vec;
+#[cfg(target_arch = "wasm32")]
+use std::string::String;
 
 use dlt_protocol::r19_11::*;
 
@@ -153,233 +161,175 @@ pub extern "C" fn analyze_dlt_message(buffer_ptr: *const u8, buffer_len: usize) 
     result_ptr
 }
 
-/// Format buffer for payload text (max 256 bytes)
-static mut PAYLOAD_FORMAT_BUFFER: [u8; 256] = [0; 256];
+#[cfg(target_arch = "wasm32")]
+static mut FORMATTED_PAYLOAD: Option<Vec<u8>> = None;
 
 /// Parse verbose payload and format if first argument is a string with {}
-/// Returns length of formatted string written to PAYLOAD_FORMAT_BUFFER, or 0 on error
+/// Returns length of formatted string, or 0 on error
+/// Result is stored in a global Vec that can be accessed via get_formatted_payload_ptr
 #[unsafe(no_mangle)]
 pub extern "C" fn format_verbose_payload(buffer_ptr: *const u8, buffer_len: usize, payload_offset: u16, payload_len: u16) -> usize {
-    if buffer_ptr.is_null() || payload_len == 0 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         return 0;
     }
-
-    let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
-    let offset = payload_offset as usize;
     
-    if offset + payload_len as usize > buffer_len {
-        return 0;
-    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if buffer_ptr.is_null() || payload_len == 0 {
+            return 0;
+        }
 
-    let payload = &buffer[offset..offset + payload_len as usize];
-    
-    // Try to parse verbose payload
-    // First 4 bytes = type info for first argument
-    if payload.len() < 4 {
-        return 0;
-    }
+        let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
+        let offset = payload_offset as usize;
+        
+        if offset + payload_len as usize > buffer_len {
+            return 0;
+        }
 
-    let type_info = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-    let is_string = (type_info & 0x0200) != 0; // STRG_ASCII flag
-    
-    if !is_string {
-        // Not a string, just return raw payload as text
-        let len = core::cmp::min(payload.len(), 255);
-        unsafe {
-            for i in 0..len {
-                if payload[i] >= 32 && payload[i] < 127 {
-                    PAYLOAD_FORMAT_BUFFER[i] = payload[i];
-                } else if payload[i] == 0 {
-                    return i;
-                }
+        let payload = &buffer[offset..offset + payload_len as usize];
+        
+        // Try to parse verbose payload
+        if payload.len() < 4 {
+            return 0;
+        }
+
+        let type_info = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+        let is_string = (type_info & 0x0200) != 0; // STRG_ASCII flag
+        
+        if !is_string {
+            // Not a string, just return raw payload as text
+            let text: Vec<u8> = payload.iter()
+                .filter(|&&b| b >= 32 && b < 127)
+                .copied()
+                .collect();
+            let len = text.len();
+            unsafe {
+                FORMATTED_PAYLOAD = Some(text);
             }
             return len;
         }
-    }
 
-    // Parse string argument
-    let mut pos = 4; // Skip type info
-    if pos + 2 > payload.len() {
-        return 0;
-    }
+        // Parse string argument
+        let mut pos = 4; // Skip type info
+        if pos + 2 > payload.len() {
+            return 0;
+        }
 
-    let str_len = u16::from_le_bytes([payload[pos], payload[pos + 1]]) as usize;
-    pos += 2;
+        let str_len = u16::from_le_bytes([payload[pos], payload[pos + 1]]) as usize;
+        pos += 2;
 
-    if pos + str_len > payload.len() {
-        return 0;
-    }
+        if pos + str_len > payload.len() {
+            return 0;
+        }
 
-    let format_str = &payload[pos..pos + str_len];
-    pos += str_len;
+        let format_str = &payload[pos..pos + str_len];
+        pos += str_len;
 
-    // Check if format string contains "{}"
-    let has_placeholder = {
-        let mut has_it = false;
-        for i in 0..format_str.len().saturating_sub(1) {
-            if format_str[i] == b'{' && format_str[i + 1] == b'}' {
-                has_it = true;
-                break;
+        // Check if format string contains "{}"
+        let format_string = String::from_utf8_lossy(format_str);
+        
+        if !format_string.contains("{}") {
+            // No placeholders, just return the string
+            unsafe {
+                FORMATTED_PAYLOAD = Some(format_str.to_vec());
             }
+            return format_str.len();
         }
-        has_it
-    };
 
-    if !has_placeholder {
-        // No placeholders, just return the string
-        let len = core::cmp::min(str_len, 255);
-        unsafe {
-            PAYLOAD_FORMAT_BUFFER[..len].copy_from_slice(&format_str[..len]);
-        }
-        return len;
-    }
-
-    // Parse next argument (assume it's an integer)
-    if pos + 4 > payload.len() {
-        // No more arguments, return format string as-is
-        let len = core::cmp::min(str_len, 255);
-        unsafe {
-            PAYLOAD_FORMAT_BUFFER[..len].copy_from_slice(&format_str[..len]);
-        }
-        return len;
-    }
-
-    let arg_type_info = u32::from_le_bytes([payload[pos], payload[pos + 1], payload[pos + 2], payload[pos + 3]]);
-    pos += 4;
-
-    // Extract type length (bits 0-3)
-    let type_length = (arg_type_info & 0x0F) as usize;
-    let arg_size = match type_length {
-        1 => 1, // 8 bit
-        2 => 2, // 16 bit
-        3 => 4, // 32 bit
-        4 => 8, // 64 bit
-        5 => 16, // 128 bit
-        _ => 4, // default to 32 bit
-    };
-
-    if pos + arg_size > payload.len() {
-        let len = core::cmp::min(str_len, 255);
-        unsafe {
-            PAYLOAD_FORMAT_BUFFER[..len].copy_from_slice(&format_str[..len]);
-        }
-        return len;
-    }
-
-    // Parse integer value (support signed/unsigned)
-    let is_signed = (arg_type_info & 0x1000) != 0; // SINT flag
-    let value: i64 = match arg_size {
-        1 => {
-            if is_signed {
-                payload[pos] as i8 as i64
-            } else {
-                payload[pos] as i64
+        // Parse next argument (assume it's an integer)
+        if pos + 4 > payload.len() {
+            // No more arguments, return format string as-is
+            unsafe {
+                FORMATTED_PAYLOAD = Some(format_str.to_vec());
             }
+            return format_str.len();
         }
-        2 => {
-            let val = u16::from_le_bytes([payload[pos], payload[pos + 1]]);
-            if is_signed {
-                val as i16 as i64
-            } else {
-                val as i64
-            }
-        }
-        4 => {
-            let val = u32::from_le_bytes([payload[pos], payload[pos + 1], payload[pos + 2], payload[pos + 3]]);
-            if is_signed {
-                val as i32 as i64
-            } else {
-                val as i64
-            }
-        }
-        8 => {
-            let val = u64::from_le_bytes([
-                payload[pos], payload[pos + 1], payload[pos + 2], payload[pos + 3],
-                payload[pos + 4], payload[pos + 5], payload[pos + 6], payload[pos + 7],
-            ]);
-            val as i64
-        }
-        _ => 0,
-    };
 
-    // Format the string by replacing first {} with the value
-    let mut out_pos = 0;
-    let mut i = 0;
-    unsafe {
-        while i < format_str.len() && out_pos < 255 {
-            if i + 1 < format_str.len() && format_str[i] == b'{' && format_str[i + 1] == b'}' {
-                // Found placeholder, insert number
-                let num_str = format_integer(value);
-                for &ch in num_str.iter() {
-                    if ch == 0 || out_pos >= 255 {
-                        break;
-                    }
-                    PAYLOAD_FORMAT_BUFFER[out_pos] = ch;
-                    out_pos += 1;
+        let arg_type_info = u32::from_le_bytes([payload[pos], payload[pos + 1], payload[pos + 2], payload[pos + 3]]);
+        pos += 4;
+
+        // Extract type length (bits 0-3)
+        let type_length = (arg_type_info & 0x0F) as usize;
+        let arg_size = match type_length {
+            1 => 1, // 8 bit
+            2 => 2, // 16 bit
+            3 => 4, // 32 bit
+            4 => 8, // 64 bit
+            5 => 16, // 128 bit
+            _ => 4, // default to 32 bit
+        };
+
+        if pos + arg_size > payload.len() {
+            unsafe {
+                FORMATTED_PAYLOAD = Some(format_str.to_vec());
+            }
+            return format_str.len();
+        }
+
+        // Parse integer value (support signed/unsigned)
+        let is_signed = (arg_type_info & 0x1000) != 0; // SINT flag
+        let value: i64 = match arg_size {
+            1 => {
+                if is_signed {
+                    payload[pos] as i8 as i64
+                } else {
+                    payload[pos] as i64
                 }
-                i += 2; // Skip {}
-                break; // Only replace first occurrence
-            } else {
-                PAYLOAD_FORMAT_BUFFER[out_pos] = format_str[i];
-                out_pos += 1;
-                i += 1;
             }
-        }
-        
-        // Copy rest of format string
-        while i < format_str.len() && out_pos < 255 {
-            PAYLOAD_FORMAT_BUFFER[out_pos] = format_str[i];
-            out_pos += 1;
-            i += 1;
-        }
-        
-        out_pos
-    }
-}
+            2 => {
+                let val = u16::from_le_bytes([payload[pos], payload[pos + 1]]);
+                if is_signed {
+                    val as i16 as i64
+                } else {
+                    val as i64
+                }
+            }
+            4 => {
+                let val = u32::from_le_bytes([payload[pos], payload[pos + 1], payload[pos + 2], payload[pos + 3]]);
+                if is_signed {
+                    val as i32 as i64
+                } else {
+                    val as i64
+                }
+            }
+            8 => {
+                let val = u64::from_le_bytes([
+                    payload[pos], payload[pos + 1], payload[pos + 2], payload[pos + 3],
+                    payload[pos + 4], payload[pos + 5], payload[pos + 6], payload[pos + 7],
+                ]);
+                val as i64
+            }
+            _ => 0,
+        };
 
-/// Helper to format integer to ASCII (no_std compatible)
-fn format_integer(mut value: i64) -> [u8; 32] {
-    let mut buf = [0u8; 32];
-    let mut pos = 31;
-    let is_negative = value < 0;
-    
-    if is_negative {
-        value = -value;
+        // Format the string using String::replace
+        let formatted = format_string.replacen("{}", &value.to_string(), 1);
+        let formatted_bytes = formatted.as_bytes().to_vec();
+        let len = formatted_bytes.len();
+        
+        unsafe {
+            FORMATTED_PAYLOAD = Some(formatted_bytes);
+        }
+        
+        len
     }
-    
-    if value == 0 {
-        buf[pos] = b'0';
-        return buf;
-    }
-    
-    while value > 0 && pos > 0 {
-        buf[pos] = b'0' + (value % 10) as u8;
-        value /= 10;
-        pos -= 1;
-    }
-    
-    if is_negative && pos > 0 {
-        buf[pos] = b'-';
-        pos -= 1;
-    }
-    
-    // Shift to start of buffer
-    let start = pos + 1;
-    let len = 32 - start;
-    for i in 0..len {
-        buf[i] = buf[start + i];
-    }
-    for i in len..32 {
-        buf[i] = 0;
-    }
-    
-    buf
 }
 
 /// Get pointer to formatted payload buffer
 #[unsafe(no_mangle)]
 pub extern "C" fn get_formatted_payload_ptr() -> *const u8 {
-    unsafe { core::ptr::addr_of!(PAYLOAD_FORMAT_BUFFER).cast::<u8>() }
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        core::ptr::addr_of!(FORMATTED_PAYLOAD)
+            .read()
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null())
+    }
+    
+    #[cfg(not(target_arch = "wasm32"))]
+    core::ptr::null()
 }
 
 /// Get the version info
@@ -447,7 +397,6 @@ pub extern "C" fn get_app_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
         return 0; // No extended header
     }
 
-    // Calculate offset to extended header
     let mut ext_offset = offset + 4; // Standard header
     if (htyp & WEID_MASK) != 0 { ext_offset += 4; }
     if (htyp & WSID_MASK) != 0 { ext_offset += 4; }

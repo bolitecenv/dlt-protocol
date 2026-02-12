@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""
+DLT WebSocket Bridge Server
+
+Connects to dlt-daemon TCP server (port 3490) and forwards DLT messages
+to WebSocket clients for browser-based analysis.
+
+Usage:
+    python3 dlt_websocket_bridge.py [--dlt-host HOST] [--dlt-port PORT] [--ws-port PORT]
+"""
+
+import asyncio
+import websockets
+import argparse
+import signal
+import sys
+
+# Configuration
+DLT_HOST = 'localhost'
+DLT_PORT = 3490
+WS_PORT = 8765
+
+# Global state
+dlt_reader_task = None
+websocket_clients = set()
+message_queue = asyncio.Queue()
+
+async def read_from_dlt():
+    """Read DLT messages from TCP server and queue them."""
+    while True:
+        try:
+            print(f"🔌 Connecting to dlt-daemon at {DLT_HOST}:{DLT_PORT}...")
+            reader, writer = await asyncio.open_connection(DLT_HOST, DLT_PORT)
+            print("✅ Connected to dlt-daemon!")
+            
+            while True:
+                # Read raw data from dlt-daemon and forward as-is
+                data = await reader.read(4096)
+                if not data:
+                    print("⚠️  dlt-daemon connection closed")
+                    break
+                
+                # Queue raw data for WebSocket clients
+                await message_queue.put(data)
+                print(f"📦 Received {len(data)} bytes")
+                print(f"   First 32 bytes: {data[:32].hex()}")
+                
+        except asyncio.CancelledError:
+            print("🛑 DLT reader cancelled")
+            break
+        except ConnectionRefusedError:
+            print(f"❌ Connection refused to {DLT_HOST}:{DLT_PORT}. Is dlt-daemon running?")
+            await asyncio.sleep(5)
+        except Exception as e:
+            prinprint(f"📤 Broadcasting message ({len(message)} bytes) to {len(websocket_clients)} client(s)")
+                # Send to all connected clients
+                websockets_to_remove = set()
+                for ws in websocket_clients:
+                    try:
+                        await ws.send(message)
+                        print(f"   ✅ Sent to {ws.remote_address}")
+                    except Exception as e:
+                        print(f"⚠️  Error sending to client: {e}")
+                        websockets_to_remove.add(ws)
+                
+                # Remove disconnected clients
+                websocket_clients.difference_update(websockets_to_remove)
+            else:
+                print(f"⚠️  No WebSocket clients connected, message dropped"
+            message = await message_queue.get()
+            
+            if websocket_clients:
+                # Send to all connected clients
+                websockets_to_remove = set()
+                for ws in websocket_clients:
+                    try:
+                        await ws.send(message)
+                    except Exception as e:
+                        print(f"⚠️  Error sending to client: {e}")
+                        websockets_to_remove.add(ws)
+                
+                # Remove disconnected clients
+                websocket_clients.difference_update(websockets_to_remove)
+                
+        except asyncio.CancelledError:
+            break
+
+async def websocket_handler(websocket):
+    """Handle WebSocket client connections."""
+    client_addr = websocket.remote_address
+    print(f"🌐 WebSocket client connected: {client_addr}")
+    
+    websocket_clients.add(websocket)
+    
+    try:
+        # Keep connection alive
+        await websocket.wait_closed()
+    finally:
+        websocket_clients.discard(websocket)
+        print(f"👋 WebSocket client disconnected: {client_addr}")
+
+async def main():
+    global DLT_HOST, DLT_PORT, WS_PORT
+    
+    parser = argparse.ArgumentParser(description='DLT WebSocket Bridge')
+    parser.add_argument('--dlt-host', default=DLT_HOST, help='DLT daemon host')
+    parser.add_argument('--dlt-port', type=int, default=DLT_PORT, help='DLT daemon port')
+    parser.add_argument('--ws-port', type=int, default=WS_PORT, help='WebSocket server port')
+    args = parser.parse_args()
+    DLT_HOST = args.dlt_host
+    DLT_PORT = args.dlt_port
+    WS_PORT = args.ws_port
+    
+    print("=" * 60)
+    print("🚀 DLT WebSocket Bridge Server")
+    print("=" * 60)
+    print(f"📡 DLT daemon:    {DLT_HOST}:{DLT_PORT}")
+    print(f"🌐 WebSocket:     ws://localhost:{WS_PORT}")
+    print(f"📄 Open browser:  http://localhost:8000/examples/dlt_stream.html")
+    print("=" * 60)
+    
+    # Start background tasks
+    dlt_task = asyncio.create_task(read_from_dlt())
+    broadcast_task = asyncio.create_task(broadcast_messages())
+    
+    # Start WebSocket server
+    async with websockets.serve(websocket_handler, 'localhost', WS_PORT):
+        print(f"✅ WebSocket server running on port {WS_PORT}")
+        print("Press Ctrl+C to stop")
+        
+        # Wait forever
+        await asyncio.Future()
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down...")
+        sys.exit(0)
