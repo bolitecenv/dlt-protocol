@@ -75,8 +75,9 @@
             try {
                 updateStatus('info', '⏳ Fetching WASM file...');
                 
-                // Load the WASM module
-                const response = await fetch('../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm');
+                // Load the WASM module (cache-busting with timestamp)
+                const cacheBuster = Date.now();
+                const response = await fetch(`../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm?v=${cacheBuster}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);

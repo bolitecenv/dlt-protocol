@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>DLT WASM Test - Message Type Parsing</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 {
+            color: #4ec9b0;
+            border-bottom: 2px solid #4ec9b0;
+            padding-bottom: 10px;
+        }
+        .container {
+            display: grid;
+            gap: 20px;
+        }
+        .input-section {
+            background: #252526;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #3e3e42;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #3e3e42;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            resize: vertical;
+        }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #1177bb;
+        }
+        .output-section {
+            background: #252526;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #3e3e42;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .message {
+            background: #2d2d30;
+            margin: 10px 0;
+            padding: 15px;
+            border-left: 4px solid #007acc;
+            border-radius: 3px;
+        }
+        .message.log { border-left-color: #4ec9b0; }
+        .message.control { border-left-color: #ce9178; }
+        .message.network { border-left-color: #c586c0; }
+        .message.trace { border-left-color: #dcdcaa; }
+        .message.error { border-left-color: #f48771; }
+        
+        .msg-header {
+            font-weight: bold;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .msg-type {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .msg-type.log { background: #4ec9b0; color: #000; }
+        .msg-type.control { background: #ce9178; color: #000; }
+        .msg-type.network { background: #c586c0; color: #000; }
+        .msg-type.trace { background: #dcdcaa; color: #000; }
+        
+        .field {
+            margin: 5px 0;
+            display: flex;
+            gap: 10px;
+        }
+        .field-name {
+            color: #9cdcfe;
+            min-width: 120px;
+        }
+        .field-value {
+            color: #ce9178;
+            font-weight: bold;
+        }
+        .hex-data {
+            color: #608b4e;
+            font-size: 11px;
+            word-break: break-all;
+            margin-top: 8px;
+            padding: 5px;
+            background: #1e1e1e;
+            border-radius: 3px;
+        }
+        .payload {
+            margin-top: 10px;
+            padding: 10px;
+            background: #1e1e1e;
+            border-radius: 3px;
+            border: 1px solid #3e3e42;
+        }
+        .stats {
+            background: #0e639c;
+            color: white;
+            padding: 10px;
+            border-radius: 3px;
+            margin-bottom: 15px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-label {
+            font-size: 11px;
+            opacity: 0.8;
+        }
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🦀 DLT Protocol WASM Test - Message Type Parsing</h1>
+    
+    <div class="container">
+        <div class="input-section">
+            <h2>Test Messages (Hex)</h2>
+            <textarea id="hexInput" placeholder="Enter hex strings, one per line...">3d01002e454355310000001e646c1a6d31024c4f470054455354
+3d02002e454355310000001e646c2dfe31024c4f470054455354230000000200
+3d040074454355310000000e648c89ab4101444c5444494e544d
+3500002745435531648d75ae26014441310044433100</textarea>
+            <button onclick="parseMessages()">Parse Messages</button>
+            <button onclick="clearOutput()">Clear Output</button>
+        </div>
+        
+        <div class="output-section">
+            <div id="stats"></div>
+            <div id="output"></div>
+        </div>
+    </div>
+
+    <script>
+        let wasmModule;
+        let wasmMemory;
+
+        async function loadWasm() {
+            try {
+                const response = await fetch('../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm');
+                const bytes = await response.arrayBuffer();
+                const result = await WebAssembly.instantiate(bytes, {});
+                wasmModule = result.instance.exports;
+                wasmMemory = wasmModule.memory;
+                console.log('✅ WASM module loaded successfully');
+            } catch (error) {
+                console.error('❌ Failed to load WASM:', error);
+                document.getElementById('output').innerHTML = 
+                    '<div class="message error">Failed to load WASM module: ' + error.message + '</div>';
+            }
+        }
+
+        function hexToBytes(hex) {
+            hex = hex.replace(/\s/g, '');
+            const bytes = [];
+            for (let i = 0; i < hex.length; i += 2) {
+                bytes.push(parseInt(hex.substr(i, 2), 16));
+            }
+            return new Uint8Array(bytes);
+        }
+
+        function bytesToHex(bytes) {
+            return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function bytesToString(bytes) {
+            return Array.from(bytes)
+                .filter(b => b !== 0)  // Remove null bytes
+                .map(b => b >= 32 && b < 127 ? String.fromCharCode(b) : '.')
+                .join('');
+        }
+
+        function getMessageTypeName(mstp) {
+            const types = ['Log', 'Trace', 'Network', 'Control'];
+            return types[mstp] || 'Unknown';
+        }
+
+        function getLogLevelName(level) {
+            const levels = ['', 'Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose'];
+            return levels[level] || 'Unknown';
+        }
+
+        function parseMessages() {
+            if (!wasmModule) {
+                document.getElementById('output').innerHTML = 
+                    '<div class="message error">WASM not loaded yet. Please wait...</div>';
+                return;
+            }
+
+            const input = document.getElementById('hexInput').value;
+            const hexLines = input.split('\n').filter(line => line.trim().length > 0);
+            
+            let output = '';
+            let stats = {
+                total: 0,
+                log: 0,
+                control: 0,
+                network: 0,
+                trace: 0,
+                errors: 0
+            };
+
+            hexLines.forEach((hexLine, index) => {
+                stats.total++;
+                try {
+                    const msgBytes = hexToBytes(hexLine.trim());
+                    
+                    // Write message to WASM memory
+                    const bufferPtr = wasmModule.allocate(msgBytes.length);
+                    if (bufferPtr === 0) {
+                        throw new Error('Failed to allocate memory');
+                    }
+
+                    const buffer = new Uint8Array(wasmMemory.buffer, bufferPtr, msgBytes.length);
+                    buffer.set(msgBytes);
+
+                    // Analyze the message
+                    const resultPtr = wasmModule.analyze_dlt_message(bufferPtr, msgBytes.length);
+                    
+                    if (resultPtr === 0) {
+                        stats.errors++;
+                        output += `<div class="message error">
+                            <div class="msg-header">Message #${index + 1} - Parse Error</div>
+                            <div class="hex-data">${hexLine.trim()}</div>
+                        </div>`;
+                        wasmModule.deallocate(bufferPtr);
+                        return;
+                    }
+
+                    // Read analysis result (32 bytes)
+                    const result = new Uint8Array(wasmMemory.buffer, resultPtr, 32);
+                    const totalLen = result[0] | (result[1] << 8);
+                    const headerLen = result[2] | (result[3] << 8);
+                    const payloadLen = result[4] | (result[5] << 8);
+                    const payloadOffset = result[6] | (result[7] << 8);
+                    const msgType = result[8];
+                    const logLevel = result[9];
+                    const hasSerial = result[10];
+                    const hasEcu = result[11];
+                    const ecuId = bytesToString(result.slice(12, 16));
+                    const appId = bytesToString(result.slice(16, 20));
+                    const ctxId = bytesToString(result.slice(20, 24));
+                    const mstp = result[24];
+                    const isVerbose = result[25];
+
+                    const msgTypeName = getMessageTypeName(mstp);
+                    const msgTypeClass = msgTypeName.toLowerCase();
+                    
+                    // Update stats
+                    if (mstp === 0) stats.log++;
+                    else if (mstp === 1) stats.trace++;
+                    else if (mstp === 2) stats.network++;
+                    else if (mstp === 3) stats.control++;
+
+                    output += `<div class="message ${msgTypeClass}">
+                        <div class="msg-header">
+                            <span class="msg-type ${msgTypeClass}">${msgTypeName}</span>
+                            Message #${index + 1}
+                        </div>`;
+
+                    output += `<div class="field"><span class="field-name">MSTP:</span><span class="field-value">${mstp} (${msgTypeName})</span></div>`;
+                    
+                    if (mstp === 0) {
+                        output += `<div class="field"><span class="field-name">Log Level:</span><span class="field-value">${logLevel} (${getLogLevelName(logLevel)})</span></div>`;
+                    }
+                    
+                    output += `<div class="field"><span class="field-name">Verbose:</span><span class="field-value">${isVerbose ? 'Yes' : 'No'}</span></div>`;
+                    output += `<div class="field"><span class="field-name">Total Length:</span><span class="field-value">${totalLen} bytes</span></div>`;
+                    output += `<div class="field"><span class="field-name">Header Length:</span><span class="field-value">${headerLen} bytes</span></div>`;
+                    output += `<div class="field"><span class="field-name">Payload Length:</span><span class="field-value">${payloadLen} bytes</span></div>`;
+                    
+                    if (hasSerial) {
+                        output += `<div class="field"><span class="field-name">Serial Header:</span><span class="field-value">Present</span></div>`;
+                    }
+                    
+                    if (hasEcu && ecuId) {
+                        output += `<div class="field"><span class="field-name">ECU ID:</span><span class="field-value">${ecuId}</span></div>`;
+                    }
+                    
+                    if (appId) {
+                        output += `<div class="field"><span class="field-name">App ID:</span><span class="field-value">${appId}</span></div>`;
+                    }
+                    
+                    if (ctxId) {
+                        output += `<div class="field"><span class="field-name">Context ID:</span><span class="field-value">${ctxId}</span></div>`;
+                    }
+
+                    // Only parse payload for Log messages (MSTP=0)
+                    if (payloadLen > 0) {
+                        const payloadBytes = msgBytes.slice(payloadOffset, payloadOffset + payloadLen);
+                        output += `<div class="payload">`;
+                        output += `<strong>Payload (${payloadLen} bytes):</strong><br>`;
+                        output += `<div class="hex-data">Hex: ${bytesToHex(payloadBytes)}</div>`;
+                        
+                        if (mstp === 0 && isVerbose) {
+                            output += `<div style="margin-top: 8px; color: #4ec9b0;">📝 Log message verbose payload - ready for parsing</div>`;
+                        } else if (mstp === 3) {
+                            output += `<div style="margin-top: 8px; color: #ce9178;">🔧 Service/Control message - payload not parsed</div>`;
+                        } else if (mstp === 2) {
+                            output += `<div style="margin-top: 8px; color: #c586c0;">🌐 Network message - payload not parsed</div>`;
+                        }
+                        
+                        output += `</div>`;
+                    }
+
+                    output += `<div class="hex-data">Raw: ${hexLine.trim()}</div>`;
+                    output += `</div>`;
+
+                    // Clean up
+                    wasmModule.deallocate(bufferPtr);
+                    wasmModule.deallocate(resultPtr);
+
+                } catch (error) {
+                    stats.errors++;
+                    output += `<div class="message error">
+                        <div class="msg-header">Message #${index + 1} - Error</div>
+                        <div class="field"><span class="field-name">Error:</span><span class="field-value">${error.message}</span></div>
+                        <div class="hex-data">${hexLine.trim()}</div>
+                    </div>`;
+                }
+            });
+
+            // Display stats
+            document.getElementById('stats').innerHTML = `
+                <div class="stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Total Messages</span>
+                        <span class="stat-value">${stats.total}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Log Messages</span>
+                        <span class="stat-value">${stats.log}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Control Messages</span>
+                        <span class="stat-value">${stats.control}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Network Messages</span>
+                        <span class="stat-value">${stats.network}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Trace Messages</span>
+                        <span class="stat-value">${stats.trace}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Errors</span>
+                        <span class="stat-value">${stats.errors}</span>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('output').innerHTML = output;
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+            document.getElementById('stats').innerHTML = '';
+            if (wasmModule && wasmModule.reset_allocator) {
+                wasmModule.reset_allocator();
+            }
+        }
+
+        // Load WASM on page load
+        loadWasm();
+    </script>
+</body>
+</html>

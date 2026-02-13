@@ -281,9 +281,13 @@ impl<'a> DltMessageBuilder<'a> {
         }
 
         // Write Extended Header
+        // MSIN byte structure (per DLT spec):
+        //   bit 7-4: MSTP (Message Type) - 0 for Log
+        //   bit 3-1: MTIN (Message Type Info) - log level
+        //   bit 0:   VERB (Verbose mode flag)
         let verbose_bit = if verbose { 0x01 } else { 0x00 };
-        let mtin_bits = (log_level.to_bits() & 0x0F) << 4;
-        let mstp_bits = (MstpType::DltTypeLog.to_bits() & 0x07) << 1;
+        let mstp_bits = (MstpType::DltTypeLog.to_bits() & 0x0F) << 4;
+        let mtin_bits = (log_level.to_bits() & 0x07) << 1;
         let msin = verbose_bit | mtin_bits | mstp_bits;
 
         buffer[offset] = msin;

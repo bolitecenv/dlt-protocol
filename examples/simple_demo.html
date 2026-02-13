@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>DLT WASM シンプルデモ</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+            margin-top: 0;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        .result {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 15px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e9ecef;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .label {
+            font-weight: bold;
+            color: #555;
+            margin-bottom: 8px;
+            display: block;
+        }
+        .info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            padding: 10px;
+            border-radius: 5px;
+            color: #0c5460;
+            margin: 15px 0;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status.ok { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .field {
+            margin: 8px 0;
+            padding: 8px;
+            background: white;
+            border-radius: 4px;
+        }
+        .field-name {
+            color: #667eea;
+            font-weight: bold;
+            display: inline-block;
+            min-width: 150px;
+        }
+        .field-value {
+            color: #333;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🦀 DLT Protocol WASM デモ (R19-11)</h1>
+        
+        <div class="info">
+            <strong>💡 使い方:</strong> HexデータのDLTメッセージを入力して解析ボタンを押してください。<br>
+            メッセージタイプ（Log/Control/Network）を自動判別し、Logメッセージのみペイロードを解析します。
+        </div>
+
+        <div class="section">
+            <h2>📥 1. DLTメッセージの生成</h2>
+            <button onclick="generateMessage()" id="genBtn">サンプルメッセージを生成</button>
+            <div id="genResult" class="result" style="display:none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>🔍 2. DLTメッセージの解析</h2>
+            <label class="label">Hexデータを入力:</label>
+            <input type="text" id="hexInput" 
+                   value="3d01002e454355310000001e646c1a6d31024c4f470054455354"
+                   placeholder="例: 3d01002e454355310000001e646c1a6d31024c4f470054455354">
+            <br><br>
+            <button onclick="analyzeMessage()" id="analyzeBtn">メッセージを解析</button>
+            <div id="analyzeResult" class="result" style="display:none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>📊 サンプルメッセージ</h2>
+            <button onclick="loadSample(0)">Control Message</button>
+            <button onclick="loadSample(1)">Log Message (Verbose)</button>
+            <button onclick="loadSample(2)">Log + Payload</button>
+            <button onclick="loadSample(3)">Network Message</button>
+        </div>
+    </div>
+
+    <script>
+        let wasmModule;
+        let wasmReady = false;
+
+        // サンプルメッセージ
+        const samples = [
+            '3d040074454355310000000e648c89ab4101444c5444494e544d',  // Control - ECU1, DLTD, INTM
+            '3d01002e454355310000001e646c1a6d31024c4f470054455354',  // Log - ECU1, LOG, TEST
+            '3d02002e454355310000001e646c2dfe31024c4f470054455354230000000200',  // Log+Payload
+            '3500002745435531648d75ae26014441310044433100',  // Network
+        ];
+
+        function loadSample(index) {
+            document.getElementById('hexInput').value = samples[index];
+        }
+
+        async function loadWasm() {
+            try {
+                const cacheBuster = Date.now();
+                const response = await fetch(`../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm?v=${cacheBuster}`);
+                const bytes = await response.arrayBuffer();
+                const result = await WebAssembly.instantiate(bytes, {});
+                wasmModule = result.instance.exports;
+                wasmReady = true;
+                console.log('✅ WASM ロード完了');
+                updateButtonStates();
+            } catch (error) {
+                console.error('❌ WASM ロード失敗:', error);
+                alert('WASMモジュールのロードに失敗しました: ' + error.message);
+            }
+        }
+
+        function updateButtonStates() {
+            document.getElementById('genBtn').disabled = !wasmReady;
+            document.getElementById('analyzeBtn').disabled = !wasmReady;
+        }
+
+        function hexToBytes(hex) {
+            hex = hex.replace(/\s/g, '');
+            const bytes = [];
+            for (let i = 0; i < hex.length; i += 2) {
+                bytes.push(parseInt(hex.substr(i, 2), 16));
+            }
+            return new Uint8Array(bytes);
+        }
+
+        function bytesToHex(bytes) {
+            return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function bytesToString(bytes) {
+            return Array.from(bytes)
+                .filter(b => b !== 0)  // Remove null bytes
+                .map(b => b >= 32 && b < 127 ? String.fromCharCode(b) : '.')
+                .join('');
+        }
+
+        function generateMessage() {
+            if (!wasmReady) {
+                alert('WASMがまだロードされていません');
+                return;
+            }
+
+            const bufferPtr = wasmModule.allocate(256);
+            const size = wasmModule.create_dlt_message(bufferPtr, 256);
+            
+            let result = '';
+            if (size > 0) {
+                const message = new Uint8Array(wasmModule.memory.buffer, bufferPtr, size);
+                result = `<span class="status ok">✅ 成功</span>\n\n`;
+                result += `生成されたメッセージ (${size}バイト):\n`;
+                result += bytesToHex(message) + '\n\n';
+                result += `ECU ID: WASM\n`;
+                result += `App ID: TEST\n`;
+                result += `Context ID: DEMO\n`;
+                result += `Payload: "Hello from WASM!"`;
+                
+                document.getElementById('hexInput').value = bytesToHex(message);
+            } else {
+                result = `<span class="status error">❌ エラー</span>\n\nエラーコード: ${size}`;
+            }
+            
+            wasmModule.deallocate(bufferPtr);
+            
+            const resultDiv = document.getElementById('genResult');
+            resultDiv.innerHTML = result;
+            resultDiv.style.display = 'block';
+        }
+
+        function getMessageTypeName(mstp) {
+            const types = ['Log', 'Trace', 'Network', 'Control'];
+            return types[mstp] || 'Unknown';
+        }
+
+        function getLogLevelName(level) {
+            const levels = ['', 'Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose'];
+            return levels[level] || 'Unknown';
+        }
+
+        function analyzeMessage() {
+            if (!wasmReady) {
+                alert('WASMがまだロードされていません');
+                return;
+            }
+
+            const hexInput = document.getElementById('hexInput').value.trim();
+            if (!hexInput) {
+                alert('Hexデータを入力してください');
+                return;
+            }
+
+            try {
+                const msgBytes = hexToBytes(hexInput);
+                
+                // WASMメモリに書き込み
+                const bufferPtr = wasmModule.allocate(msgBytes.length);
+                const buffer = new Uint8Array(wasmModule.memory.buffer, bufferPtr, msgBytes.length);
+                buffer.set(msgBytes);
+
+                // 解析実行
+                const resultPtr = wasmModule.analyze_dlt_message(bufferPtr, msgBytes.length);
+                
+                let result = '';
+                if (resultPtr === 0) {
+                    result = `<span class="status error">❌ 解析失敗</span>\n\n無効なDLTメッセージです`;
+                } else {
+                    // 解析結果を読み取り (32バイト)
+                    const res = new Uint8Array(wasmModule.memory.buffer, resultPtr, 32);
+                    const totalLen = res[0] | (res[1] << 8);
+                    const headerLen = res[2] | (res[3] << 8);
+                    const payloadLen = res[4] | (res[5] << 8);
+                    const payloadOffset = res[6] | (res[7] << 8);
+                    const msgType = res[8];
+                    const logLevel = res[9];
+                    const hasSerial = res[10];
+                    const hasEcu = res[11];
+                    const ecuId = bytesToString(res.slice(12, 16));
+                    const appId = bytesToString(res.slice(16, 20));
+                    const ctxId = bytesToString(res.slice(20, 24));
+                    const mstp = res[24];
+                    const isVerbose = res[25];
+
+                    const msgTypeName = getMessageTypeName(mstp);
+                    
+                    result = `<span class="status ok">✅ 解析成功</span>\n\n`;
+                    result += `<div class="field"><span class="field-name">メッセージタイプ (MSTP):</span> <span class="field-value">${mstp} (${msgTypeName})</span></div>`;
+                    
+                    if (mstp === 0) {
+                        result += `<div class="field"><span class="field-name">ログレベル:</span> <span class="field-value">${logLevel} (${getLogLevelName(logLevel)})</span></div>`;
+                    }
+                    
+                    result += `<div class="field"><span class="field-name">Verboseモード:</span> <span class="field-value">${isVerbose ? 'はい' : 'いいえ'}</span></div>`;
+                    result += `<div class="field"><span class="field-name">総メッセージ長:</span> <span class="field-value">${totalLen} バイト</span></div>`;
+                    result += `<div class="field"><span class="field-name">ヘッダ長:</span> <span class="field-value">${headerLen} バイト</span></div>`;
+                    result += `<div class="field"><span class="field-name">ペイロード長:</span> <span class="field-value">${payloadLen} バイト</span></div>`;
+                    
+                    if (hasSerial) {
+                        result += `<div class="field"><span class="field-name">シリアルヘッダ:</span> <span class="field-value">あり (DLS\\x01)</span></div>`;
+                    }
+                    
+                    if (hasEcu && ecuId) {
+                        result += `<div class="field"><span class="field-name">ECU ID:</span> <span class="field-value">${ecuId}</span></div>`;
+                    }
+                    
+                    if (appId) {
+                        result += `<div class="field"><span class="field-name">App ID:</span> <span class="field-value">${appId}</span></div>`;
+                    }
+                    
+                    if (ctxId) {
+                        result += `<div class="field"><span class="field-name">Context ID:</span> <span class="field-value">${ctxId}</span></div>`;
+                    }
+
+                    if (payloadLen > 0) {
+                        const payloadBytes = msgBytes.slice(payloadOffset, payloadOffset + payloadLen);
+                        result += `\n<div class="field"><span class="field-name">ペイロード (Hex):</span></div>`;
+                        result += `<div style="background: white; padding: 8px; border-radius: 4px; font-size: 11px; word-break: break-all;">${bytesToHex(payloadBytes)}</div>`;
+                        
+                        if (mstp === 0) {
+                            result += `\n<div style="margin-top: 10px; padding: 10px; background: #d4edda; border-radius: 4px; color: #155724;">`;
+                            result += `📝 Logメッセージのペイロード - 解析可能`;
+                            result += `</div>`;
+                        } else if (mstp === 3) {
+                            result += `\n<div style="margin-top: 10px; padding: 10px; background: #fff3cd; border-radius: 4px; color: #856404;">`;
+                            result += `🔧 Controlメッセージ - ペイロード解析対象外`;
+                            result += `</div>`;
+                        } else if (mstp === 2) {
+                            result += `\n<div style="margin-top: 10px; padding: 10px; background: #e2e3e5; border-radius: 4px; color: #383d41;">`;
+                            result += `🌐 Networkメッセージ - ペイロード解析対象外`;
+                            result += `</div>`;
+                        }
+                    }
+
+                    wasmModule.deallocate(resultPtr);
+                }
+                
+                wasmModule.deallocate(bufferPtr);
+                
+                const resultDiv = document.getElementById('analyzeResult');
+                resultDiv.innerHTML = result;
+                resultDiv.style.display = 'block';
+
+            } catch (error) {
+                document.getElementById('analyzeResult').innerHTML = 
+                    `<span class="status error">❌ エラー</span>\n\n${error.message}`;
+                document.getElementById('analyzeResult').style.display = 'block';
+            }
+        }
+
+        // ページロード時にWASMをロード
+        window.onload = () => {
+            updateButtonStates();
+            loadWasm();
+        };
+    </script>
+</body>
+</html>
