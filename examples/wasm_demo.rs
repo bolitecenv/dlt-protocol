@@ -563,7 +563,7 @@ struct AllocHeader {
 }
 
 const HEADER_SIZE: usize = core::mem::size_of::<AllocHeader>();
-static mut HEAP: [u8; 8192] = [0; 8192]; // Increased from 4096
+static mut HEAP: [u8; 16384] = [0; 16384];
 static mut HEAP_POS: usize = 0;
 
 /// Allocate memory for WASM with size tracking
@@ -649,6 +649,536 @@ pub extern "C" fn get_heap_capacity() -> usize {
         (*heap_ptr).len()
     }
 }
+
+// ============================================================================
+// Service Message Generation (WASM C API)
+// ============================================================================
+
+/// Generate a verbose DLT log message with payload string.
+///
+/// Parameters written to `config_ptr` (24 bytes):
+///   [0..4]   ecu_id   (4 bytes ASCII, e.g. "ECU1")
+///   [4..8]   app_id   (4 bytes ASCII)
+///   [8..12]  ctx_id   (4 bytes ASCII)
+///   [12]     log_level (1=Fatal..6=Verbose)
+///   [13]     verbose   (0 or 1)
+///   [14]     noar      (number of arguments, usually 1)
+///   [15]     reserved
+///   [16..20] timestamp (u32 LE)
+///   [20..24] reserved
+///
+/// `payload_ptr`/`payload_len`: raw UTF-8 string to embed
+/// `out_ptr`/`out_len`: output buffer for the complete DLT message
+///
+/// Returns positive size on success, negative error code on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_log_message(
+    config_ptr: *const u8,
+    payload_ptr: *const u8,
+    payload_len: usize,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || payload_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+    if out_len < 64 {
+        return ERROR_BUFFER_TOO_SMALL;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 24) };
+    let payload = unsafe { core::slice::from_raw_parts(payload_ptr, payload_len) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+    let log_level_raw = config[12];
+    let verbose = config[13] != 0;
+    let noar = config[14];
+    let timestamp = u32::from_le_bytes([config[16], config[17], config[18], config[19]]);
+
+    let log_level = match log_level_raw {
+        1 => MtinTypeDltLog::DltLogFatal,
+        2 => MtinTypeDltLog::DltLogError,
+        3 => MtinTypeDltLog::DltLogWarn,
+        4 => MtinTypeDltLog::DltLogInfo,
+        5 => MtinTypeDltLog::DltLogDebug,
+        6 => MtinTypeDltLog::DltLogVerbose,
+        _ => MtinTypeDltLog::DltLogInfo,
+    };
+
+    let mut builder = DltMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id)
+        .with_timestamp(timestamp);
+
+    match builder.generate_log_message_with_payload(
+        buffer,
+        payload,
+        log_level,
+        noar,
+        verbose,
+    ) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate a service status response (works for most service commands).
+///
+/// Parameters:
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `service_id`:  Service ID value (e.g. 0x01=SetLogLevel, 0x04=GetDefaultLogLevel, ...)
+///   `status`:      Response status (0=OK, 1=NOT_SUPPORTED, 2=ERROR)
+///   `out_ptr/len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_service_response(
+    config_ptr: *const u8,
+    service_id: u32,
+    status: u8,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+    if out_len < 64 {
+        return ERROR_BUFFER_TOO_SMALL;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let sid = match ServiceId::from_u32(service_id) {
+        Some(s) => s,
+        None => return ERROR_INVALID_FORMAT,
+    };
+    let st = match ServiceStatus::from_u8(status) {
+        Some(s) => s,
+        None => return ERROR_INVALID_FORMAT,
+    };
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_status_response(buffer, sid, st) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate SetLogLevel service request.
+///
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `target_app_ptr` (4 bytes): Target application ID
+///   `target_ctx_ptr` (4 bytes): Target context ID
+///   `log_level`: sint8 log level
+///   `out_ptr/len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_set_log_level_request(
+    config_ptr: *const u8,
+    target_app_ptr: *const u8,
+    target_ctx_ptr: *const u8,
+    log_level: i8,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || target_app_ptr.is_null() || target_ctx_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let target_app = unsafe { &*(target_app_ptr as *const [u8; 4]) };
+    let target_ctx = unsafe { &*(target_ctx_ptr as *const [u8; 4]) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_set_log_level_request(buffer, target_app, target_ctx, log_level) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate GetLogInfo service request.
+///
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `options`: 6=with log level/trace status, 7=with descriptions
+///   `target_app_ptr` (4 bytes): Target application ID (0000 = all)
+///   `target_ctx_ptr` (4 bytes): Target context ID (0000 = all)
+///   `out_ptr/len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_get_log_info_request(
+    config_ptr: *const u8,
+    options: u8,
+    target_app_ptr: *const u8,
+    target_ctx_ptr: *const u8,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || target_app_ptr.is_null() || target_ctx_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let target_app = unsafe { &*(target_app_ptr as *const [u8; 4]) };
+    let target_ctx = unsafe { &*(target_ctx_ptr as *const [u8; 4]) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_get_log_info_request(buffer, options, target_app, target_ctx) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate GetDefaultLogLevel service request.
+///
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `out_ptr/len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_get_default_log_level_request(
+    config_ptr: *const u8,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_get_default_log_level_request(buffer) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate GetSoftwareVersion service request.
+///
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `out_ptr/len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_get_software_version_request(
+    config_ptr: *const u8,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_get_software_version_request(buffer) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate GetSoftwareVersion service response.
+///
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `status`: Response status
+///   `version_ptr/version_len`: Version string bytes
+///   `out_ptr/out_len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_get_software_version_response(
+    config_ptr: *const u8,
+    status: u8,
+    version_ptr: *const u8,
+    version_len: usize,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || version_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let version = unsafe { core::slice::from_raw_parts(version_ptr, version_len) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let st = match ServiceStatus::from_u8(status) {
+        Some(s) => s,
+        None => return ERROR_INVALID_FORMAT,
+    };
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_get_software_version_response(buffer, st, version) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Generate GetDefaultLogLevel service response.
+///
+///   `config_ptr` (12 bytes): [ecu_id(4)][app_id(4)][ctx_id(4)]
+///   `status`: Response status
+///   `log_level`: Current default log level
+///   `out_ptr/out_len`: Output buffer
+///
+/// Returns message size or negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn generate_get_default_log_level_response(
+    config_ptr: *const u8,
+    status: u8,
+    log_level: u8,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if config_ptr.is_null() || out_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+
+    let config = unsafe { core::slice::from_raw_parts(config_ptr, 12) };
+    let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_len) };
+
+    let ecu_id: &[u8; 4] = config[0..4].try_into().unwrap_or(&[0u8; 4]);
+    let app_id: &[u8; 4] = config[4..8].try_into().unwrap_or(&[0u8; 4]);
+    let ctx_id: &[u8; 4] = config[8..12].try_into().unwrap_or(&[0u8; 4]);
+
+    let st = match ServiceStatus::from_u8(status) {
+        Some(s) => s,
+        None => return ERROR_INVALID_FORMAT,
+    };
+
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(ecu_id)
+        .with_app_id(app_id)
+        .with_context_id(ctx_id);
+
+    match builder.generate_get_default_log_level_response(buffer, st, log_level) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+// ============================================================================
+// Service Message Parsing (WASM C API)
+// ============================================================================
+
+/// Parse a complete DLT message and extract service information.
+///
+/// Writes a ServiceParseResult to `result_ptr` (48 bytes):
+///   [0..4]   service_id    (u32 LE)
+///   [4]      is_response   (0=request, 1=response)
+///   [5]      status        (response status byte, 0 for requests)
+///   [6]      mstp          (message type: 3=control)
+///   [7]      mtin          (1=request, 2=response)
+///   [8..12]  ecu_id        (4 bytes)
+///   [12..16] app_id        (4 bytes)
+///   [16..20] ctx_id        (4 bytes)
+///   [20..22] payload_len   (u16 LE, service payload length)
+///   [22..24] payload_off   (u16 LE, offset of service payload in buffer)
+///   [24..28] param1        (u32 LE, service-specific parameter 1)
+///   [28..32] param2        (u32 LE, service-specific parameter 2)
+///   [32]     param3        (u8, service-specific parameter 3)
+///   [33..48] reserved
+///
+/// Returns 1 on success, negative error code on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn parse_service_message(
+    buffer_ptr: *const u8,
+    buffer_len: usize,
+    result_ptr: *mut u8,
+) -> i32 {
+    if buffer_ptr.is_null() || result_ptr.is_null() || buffer_len < 4 {
+        return ERROR_NULL_POINTER;
+    }
+
+    let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
+    let result = unsafe { core::slice::from_raw_parts_mut(result_ptr, 48) };
+
+    // Zero out result
+    for b in result.iter_mut() {
+        *b = 0;
+    }
+
+    // Parse DLT header
+    let mut parser = DltHeaderParser::new(buffer);
+    let message = match parser.parse_message() {
+        Ok(msg) => msg,
+        Err(_) => return ERROR_INVALID_FORMAT,
+    };
+
+    // Must have extended header
+    let ext_hdr = match &message.extended_header {
+        Some(h) => h,
+        None => return ERROR_INVALID_FORMAT,
+    };
+
+    let mstp = ext_hdr.message_type();
+    let mtin_raw = (ext_hdr.msin >> 4) & 0x0F;
+
+    // Write ecu/app/ctx IDs
+    if let Some(ecu) = message.ecu_id {
+        result[8..12].copy_from_slice(&ecu);
+    }
+    result[12..16].copy_from_slice(&ext_hdr.apid);
+    result[16..20].copy_from_slice(&ext_hdr.ctid);
+    result[6] = mstp.to_bits();
+    result[7] = mtin_raw;
+
+    // Check if it's a control message
+    if !matches!(mstp, MstpType::DltTypeControl) {
+        // Not a service message - still write header info and return
+        let payload_len = message.payload.len() as u16;
+        result[20] = (payload_len & 0xFF) as u8;
+        result[21] = ((payload_len >> 8) & 0xFF) as u8;
+        return 1;
+    }
+
+    // Parse service payload
+    let service_parser = DltServiceParser::new(message.payload);
+    let sid = match service_parser.parse_service_id() {
+        Ok(s) => s,
+        Err(_) => return ERROR_INVALID_FORMAT,
+    };
+
+    let sid_u32 = sid.to_u32();
+    result[0..4].copy_from_slice(&sid_u32.to_le_bytes());
+
+    let is_response = mtin_raw == MtinTypeDltControl::DltControlResponse.to_bits();
+    result[4] = if is_response { 1 } else { 0 };
+
+    let payload_len = message.payload.len() as u16;
+    result[20] = (payload_len & 0xFF) as u8;
+    result[21] = ((payload_len >> 8) & 0xFF) as u8;
+
+    // Calculate payload offset in the original buffer
+    let mut hdr_size: u16 = 4; // standard header
+    if message.has_serial_header { hdr_size += 4; } // serial header is before standard header but offsets from buffer start
+    if message.ecu_id.is_some() { hdr_size += 4; }
+    if message.session_id.is_some() { hdr_size += 4; }
+    if message.timestamp.is_some() { hdr_size += 4; }
+    if message.extended_header.is_some() { hdr_size += 10; }
+    let serial_offset: u16 = if message.has_serial_header { 4 } else { 0 };
+    let payload_offset = serial_offset + hdr_size;
+    result[22] = (payload_offset & 0xFF) as u8;
+    result[23] = ((payload_offset >> 8) & 0xFF) as u8;
+
+    // Parse service-specific parameters
+    if is_response {
+        if let Ok(status) = service_parser.parse_status_response() {
+            result[5] = status.to_u8();
+        }
+
+        // Parse extra fields per service type
+        match sid {
+            ServiceId::GetDefaultLogLevel => {
+                if let Ok((_, level)) = service_parser.parse_get_default_log_level_response() {
+                    result[32] = level;
+                }
+            }
+            ServiceId::GetSoftwareVersion => {
+                if let Ok((_, ver)) = service_parser.parse_get_software_version_response() {
+                    let vlen = core::cmp::min(ver.len(), 15) as u32;
+                    result[24..28].copy_from_slice(&vlen.to_le_bytes());
+                    // version string offset from payload start = 9
+                    let ver_off = (payload_offset + 9) as u32;
+                    result[28..32].copy_from_slice(&ver_off.to_le_bytes());
+                }
+            }
+            _ => {}
+        }
+    } else {
+        // Request-specific parsing
+        match sid {
+            ServiceId::SetLogLevel => {
+                if let Ok((app, ctx, level)) = service_parser.parse_set_log_level_request() {
+                    result[24..28].copy_from_slice(&app);
+                    result[28..32].copy_from_slice(&ctx);
+                    result[32] = level as u8;
+                }
+            }
+            ServiceId::GetLogInfo => {
+                if let Ok((options, app, ctx)) = service_parser.parse_get_log_info_request() {
+                    result[24..28].copy_from_slice(&app);
+                    result[28..32].copy_from_slice(&ctx);
+                    result[32] = options;
+                }
+            }
+            ServiceId::SetDefaultLogLevel => {
+                if let Ok(level) = service_parser.parse_set_default_log_level_request() {
+                    result[32] = level as u8;
+                }
+            }
+            ServiceId::SetMessageFiltering => {
+                if let Ok(enabled) = service_parser.parse_set_message_filtering_request() {
+                    result[32] = if enabled { 1 } else { 0 };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    1
+}
+
 /// Dummy main for non-WASM builds (allows cargo test to compile)
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {

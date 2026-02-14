@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLT R19-11 Service WASM Test</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', 'Courier New', monospace;
+            max-width: 960px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 { color: #4ec9b0; margin-bottom: 8px; }
+        h2 { color: #569cd6; margin: 16px 0 8px; font-size: 16px; }
+        .subtitle { color: #888; font-size: 13px; margin-bottom: 16px; }
+        .panel {
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            padding: 14px;
+            margin-bottom: 12px;
+        }
+        .status {
+            padding: 8px 12px;
+            margin: 6px 0;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .ok { background: #1e3a1e; border-left: 3px solid #4ec9b0; }
+        .err { background: #3a1e1e; border-left: 3px solid #f48771; }
+        .info { background: #1e2a3a; border-left: 3px solid #569cd6; }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 7px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 3px;
+            font-size: 13px;
+        }
+        button:hover { background: #1177bb; }
+        button.secondary { background: #3c3c3c; }
+        button.secondary:hover { background: #555; }
+        pre {
+            background: #2d2d2d;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            border: 1px solid #444;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .hex { color: #ce9178; }
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+        }
+        .field-row label {
+            min-width: 100px;
+            font-size: 12px;
+            color: #9cdcfe;
+        }
+        .field-row input, .field-row select {
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: #d4d4d4;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .field-row input { width: 120px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+        #output { max-height: 500px; overflow-y: auto; }
+        .badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .badge-req { background: #264f78; color: #9cdcfe; }
+        .badge-resp { background: #37373d; color: #4ec9b0; }
+        .badge-log { background: #3a2a1e; color: #ce9178; }
+    </style>
+</head>
+<body>
+    <h1>DLT R19-11 WASM Test</h1>
+    <div class="subtitle">Log &amp; Service Message Generator / Parser</div>
+
+    <div id="load-status" class="status info">Loading WASM module...</div>
+
+    <div id="app" style="display:none;">
+
+    <!-- Log Message Generator -->
+    <div class="panel">
+        <h2>Log Message Generator</h2>
+        <div class="grid">
+            <div>
+                <div class="field-row"><label>ECU ID</label><input id="log-ecu" value="ECU1" maxlength="4"></div>
+                <div class="field-row"><label>App ID</label><input id="log-app" value="APP1" maxlength="4"></div>
+                <div class="field-row"><label>Context ID</label><input id="log-ctx" value="CTX1" maxlength="4"></div>
+            </div>
+            <div>
+                <div class="field-row">
+                    <label>Log Level</label>
+                    <select id="log-level">
+                        <option value="1">Fatal</option>
+                        <option value="2">Error</option>
+                        <option value="3">Warn</option>
+                        <option value="4" selected>Info</option>
+                        <option value="5">Debug</option>
+                        <option value="6">Verbose</option>
+                    </select>
+                </div>
+                <div class="field-row">
+                    <label>Verbose</label>
+                    <select id="log-verbose"><option value="0">No</option><option value="1" selected>Yes</option></select>
+                </div>
+                <div class="field-row"><label>Payload</label><input id="log-payload" value="Hello DLT from WASM!" style="width:200px;"></div>
+            </div>
+        </div>
+        <button onclick="generateLog()">Generate Log Message</button>
+    </div>
+
+    <!-- Service Request Generator -->
+    <div class="panel">
+        <h2>Service Request Generator</h2>
+        <div class="grid">
+            <div>
+                <div class="field-row"><label>ECU ID</label><input id="svc-ecu" value="ECU1" maxlength="4"></div>
+                <div class="field-row"><label>App ID</label><input id="svc-app" value="DA1\0" maxlength="4"></div>
+                <div class="field-row"><label>Context ID</label><input id="svc-ctx" value="DC1\0" maxlength="4"></div>
+            </div>
+            <div>
+                <div class="field-row">
+                    <label>Service</label>
+                    <select id="svc-type">
+                        <option value="set_log_level">SetLogLevel (0x01)</option>
+                        <option value="get_log_info">GetLogInfo (0x03)</option>
+                        <option value="get_default_log_level">GetDefaultLogLevel (0x04)</option>
+                        <option value="get_sw_version">GetSoftwareVersion (0x13)</option>
+                    </select>
+                </div>
+                <div class="field-row"><label>Target App</label><input id="svc-tgt-app" value="APP1" maxlength="4"></div>
+                <div class="field-row"><label>Target Ctx</label><input id="svc-tgt-ctx" value="CTX1" maxlength="4"></div>
+            </div>
+        </div>
+        <button onclick="generateServiceRequest()">Generate Request</button>
+    </div>
+
+    <!-- Service Response Generator -->
+    <div class="panel">
+        <h2>Service Response Generator</h2>
+        <div class="grid">
+            <div>
+                <div class="field-row">
+                    <label>Response For</label>
+                    <select id="resp-type">
+                        <option value="status">Status Response (any)</option>
+                        <option value="get_default_log_level">GetDefaultLogLevel</option>
+                        <option value="get_sw_version">GetSoftwareVersion</option>
+                    </select>
+                </div>
+                <div class="field-row">
+                    <label>Service ID</label>
+                    <select id="resp-sid">
+                        <option value="1">SetLogLevel (0x01)</option>
+                        <option value="3">GetLogInfo (0x03)</option>
+                        <option value="4">GetDefaultLogLevel (0x04)</option>
+                        <option value="5">StoreConfiguration (0x05)</option>
+                        <option value="6">ResetToFactoryDefault (0x06)</option>
+                        <option value="19" selected>GetSoftwareVersion (0x13)</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <div class="field-row">
+                    <label>Status</label>
+                    <select id="resp-status">
+                        <option value="0" selected>OK (0)</option>
+                        <option value="1">NOT_SUPPORTED (1)</option>
+                        <option value="2">ERROR (2)</option>
+                    </select>
+                </div>
+                <div class="field-row"><label>Log Level</label><input id="resp-level" value="4" style="width:50px;"></div>
+                <div class="field-row"><label>SW Version</label><input id="resp-version" value="1.2.3" style="width:120px;"></div>
+            </div>
+        </div>
+        <button onclick="generateServiceResponse()">Generate Response</button>
+    </div>
+
+    <!-- Parse Any DLT Message -->
+    <div class="panel">
+        <h2>Parse DLT Message (hex input)</h2>
+        <div class="field-row">
+            <label>Hex bytes</label>
+            <input id="parse-hex" placeholder="e.g. 35 01 00 1b ..." style="width:100%; max-width:600px;">
+        </div>
+        <button onclick="parseHexMessage()">Parse Message</button>
+        <button class="secondary" onclick="parseLastGenerated()">Parse Last Generated</button>
+    </div>
+
+    <!-- Output -->
+    <div class="panel">
+        <h2>Output</h2>
+        <button class="secondary" onclick="clearOutput()">Clear</button>
+        <div id="output"></div>
+    </div>
+
+    </div><!-- /app -->
+
+    <script>
+    let wasm;
+    let lastGeneratedPtr = 0;
+    let lastGeneratedSize = 0;
+
+    // ---- WASM helpers ----
+    function mem() { return new Uint8Array(wasm.memory.buffer); }
+    function dv()  { return new DataView(wasm.memory.buffer); }
+
+    function writeStr4(ptr, s) {
+        const m = mem();
+        for (let i = 0; i < 4; i++) m[ptr + i] = i < s.length ? s.charCodeAt(i) : 0;
+    }
+    function writeConfig(ecuId, appId, ctxId) {
+        const ptr = wasm.allocate(12);
+        writeStr4(ptr, ecuId);
+        writeStr4(ptr + 4, appId);
+        writeStr4(ptr + 8, ctxId);
+        return ptr;
+    }
+    function writeStr(s) {
+        const enc = new TextEncoder().encode(s);
+        const ptr = wasm.allocate(enc.length);
+        mem().set(enc, ptr);
+        return { ptr, len: enc.length };
+    }
+    function writeId4(s) {
+        const ptr = wasm.allocate(4);
+        writeStr4(ptr, s);
+        return ptr;
+    }
+    function toHex(bytes) {
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    }
+    function bytesToAscii(bytes) {
+        return Array.from(bytes).filter(b => b > 0).map(b => String.fromCharCode(b)).join('');
+    }
+
+    // ---- Log Level Names ----
+    const LOG_LEVELS = { 1:'Fatal', 2:'Error', 3:'Warn', 4:'Info', 5:'Debug', 6:'Verbose' };
+    const SERVICE_NAMES = {
+        0x01:'SetLogLevel', 0x02:'SetTraceStatus', 0x03:'GetLogInfo',
+        0x04:'GetDefaultLogLevel', 0x05:'StoreConfiguration', 0x06:'ResetToFactoryDefault',
+        0x0A:'SetMessageFiltering', 0x11:'SetDefaultLogLevel', 0x12:'SetDefaultTraceStatus',
+        0x13:'GetSoftwareVersion', 0x15:'GetDefaultTraceStatus', 0x17:'GetLogChannelNames',
+        0x1F:'GetTraceStatus',
+    };
+    const STATUS_NAMES = {
+        0:'OK', 1:'NOT_SUPPORTED', 2:'ERROR', 3:'PENDING',
+        6:'WithLogLevelAndTraceStatus', 7:'WithDescriptions', 8:'NoMatchingContexts', 9:'Overflow',
+    };
+
+    // ---- Output helpers ----
+    function out(html) { document.getElementById('output').innerHTML += html; }
+    function clearOutput() { document.getElementById('output').innerHTML = ''; }
+
+    function showGenerated(label, badge, bytes, size) {
+        const hex = toHex(bytes);
+        out(`<div class="status ok">
+            <strong>${badge} ${label}</strong> — ${size} bytes
+            <pre class="hex">${hex}</pre>
+        </div>`);
+    }
+
+    // ---- Generators ----
+    function generateLog() {
+        wasm.reset_allocator();
+
+        const ecuId = document.getElementById('log-ecu').value.padEnd(4, '\0');
+        const appId = document.getElementById('log-app').value.padEnd(4, '\0');
+        const ctxId = document.getElementById('log-ctx').value.padEnd(4, '\0');
+        const level = parseInt(document.getElementById('log-level').value);
+        const verbose = parseInt(document.getElementById('log-verbose').value);
+        const payload = document.getElementById('log-payload').value;
+
+        const cfgPtr = wasm.allocate(24);
+        const m = mem();
+        writeStr4(cfgPtr, ecuId);
+        writeStr4(cfgPtr + 4, appId);
+        writeStr4(cfgPtr + 8, ctxId);
+        m[cfgPtr + 12] = level;
+        m[cfgPtr + 13] = verbose;
+        m[cfgPtr + 14] = 1; // noar
+
+        const { ptr: payPtr, len: payLen } = writeStr(payload);
+        const outPtr = wasm.allocate(512);
+
+        const size = wasm.generate_log_message(cfgPtr, payPtr, payLen, outPtr, 512);
+        if (size < 0) {
+            out(`<div class="status err">Log message generation failed: error ${size}</div>`);
+            return;
+        }
+
+        lastGeneratedPtr = outPtr;
+        lastGeneratedSize = size;
+        const bytes = mem().slice(outPtr, outPtr + size);
+        showGenerated(`Log [${LOG_LEVELS[level] || level}] "${payload}"`,
+            '<span class="badge badge-log">LOG</span>', bytes, size);
+    }
+
+    function generateServiceRequest() {
+        wasm.reset_allocator();
+
+        const ecuId = document.getElementById('svc-ecu').value.padEnd(4, '\0');
+        const appId = document.getElementById('svc-app').value.padEnd(4, '\0');
+        const ctxId = document.getElementById('svc-ctx').value.padEnd(4, '\0');
+        const svcType = document.getElementById('svc-type').value;
+        const tgtApp = document.getElementById('svc-tgt-app').value.padEnd(4, '\0');
+        const tgtCtx = document.getElementById('svc-tgt-ctx').value.padEnd(4, '\0');
+
+        const cfgPtr = writeConfig(ecuId, appId, ctxId);
+        const tgtAppPtr = writeId4(tgtApp);
+        const tgtCtxPtr = writeId4(tgtCtx);
+        const outPtr = wasm.allocate(512);
+        let size = -1;
+        let name = '';
+
+        switch (svcType) {
+            case 'set_log_level':
+                size = wasm.generate_set_log_level_request(cfgPtr, tgtAppPtr, tgtCtxPtr, 4, outPtr, 512);
+                name = 'SetLogLevel Request';
+                break;
+            case 'get_log_info':
+                size = wasm.generate_get_log_info_request(cfgPtr, 7, tgtAppPtr, tgtCtxPtr, outPtr, 512);
+                name = 'GetLogInfo Request (option=7)';
+                break;
+            case 'get_default_log_level':
+                size = wasm.generate_get_default_log_level_request(cfgPtr, outPtr, 512);
+                name = 'GetDefaultLogLevel Request';
+                break;
+            case 'get_sw_version':
+                size = wasm.generate_get_software_version_request(cfgPtr, outPtr, 512);
+                name = 'GetSoftwareVersion Request';
+                break;
+        }
+
+        if (size < 0) {
+            out(`<div class="status err">Service request generation failed: error ${size}</div>`);
+            return;
+        }
+
+        lastGeneratedPtr = outPtr;
+        lastGeneratedSize = size;
+        const bytes = mem().slice(outPtr, outPtr + size);
+        showGenerated(name, '<span class="badge badge-req">REQ</span>', bytes, size);
+    }
+
+    function generateServiceResponse() {
+        wasm.reset_allocator();
+
+        const ecuId = document.getElementById('svc-ecu').value.padEnd(4, '\0');
+        const appId = document.getElementById('svc-app').value.padEnd(4, '\0');
+        const ctxId = document.getElementById('svc-ctx').value.padEnd(4, '\0');
+        const respType = document.getElementById('resp-type').value;
+        const sid = parseInt(document.getElementById('resp-sid').value);
+        const status = parseInt(document.getElementById('resp-status').value);
+
+        const cfgPtr = writeConfig(ecuId, appId, ctxId);
+        const outPtr = wasm.allocate(512);
+        let size = -1;
+        let name = '';
+
+        switch (respType) {
+            case 'status':
+                size = wasm.generate_service_response(cfgPtr, sid, status, outPtr, 512);
+                name = `${SERVICE_NAMES[sid] || `0x${sid.toString(16)}`} Status Response`;
+                break;
+            case 'get_default_log_level': {
+                const level = parseInt(document.getElementById('resp-level').value);
+                size = wasm.generate_get_default_log_level_response(cfgPtr, status, level, outPtr, 512);
+                name = 'GetDefaultLogLevel Response';
+                break;
+            }
+            case 'get_sw_version': {
+                const ver = document.getElementById('resp-version').value;
+                const { ptr: verPtr, len: verLen } = writeStr(ver);
+                size = wasm.generate_get_software_version_response(cfgPtr, status, verPtr, verLen, outPtr, 512);
+                name = `GetSoftwareVersion Response ("${ver}")`;
+                break;
+            }
+        }
+
+        if (size < 0) {
+            out(`<div class="status err">Service response generation failed: error ${size}</div>`);
+            return;
+        }
+
+        lastGeneratedPtr = outPtr;
+        lastGeneratedSize = size;
+        const bytes = mem().slice(outPtr, outPtr + size);
+        showGenerated(name, '<span class="badge badge-resp">RESP</span>', bytes, size);
+    }
+
+    // ---- Parser ----
+    function doParse(dataPtr, dataLen) {
+        const resultPtr = wasm.allocate(48);
+        const rc = wasm.parse_service_message(dataPtr, dataLen, resultPtr);
+
+        if (rc < 0) {
+            out(`<div class="status err">Parse failed: error ${rc}</div>`);
+            return;
+        }
+
+        const m = mem();
+        const d = dv();
+        const sidU32 = d.getUint32(resultPtr, true);
+        const isResponse = m[resultPtr + 4];
+        const status = m[resultPtr + 5];
+        const mstp = m[resultPtr + 6];
+        const mtin = m[resultPtr + 7];
+        const ecuId = bytesToAscii(m.slice(resultPtr + 8, resultPtr + 12));
+        const appId = bytesToAscii(m.slice(resultPtr + 12, resultPtr + 16));
+        const ctxId = bytesToAscii(m.slice(resultPtr + 16, resultPtr + 20));
+        const payloadLen = d.getUint16(resultPtr + 20, true);
+        const payloadOff = d.getUint16(resultPtr + 22, true);
+
+        const mstpNames = { 0:'Log', 1:'AppTrace', 2:'NwTrace', 3:'Control' };
+        const mstpName = mstpNames[mstp] || `Unknown(${mstp})`;
+
+        let details = '';
+
+        if (mstp === 3) {
+            // Control/Service message
+            const sidName = SERVICE_NAMES[sidU32] || `0x${sidU32.toString(16).padStart(4, '0')}`;
+            const direction = isResponse ? 'Response' : 'Request';
+            const badge = isResponse
+                ? '<span class="badge badge-resp">RESP</span>'
+                : '<span class="badge badge-req">REQ</span>';
+
+            details = `${badge} <strong>${sidName} ${direction}</strong>`;
+
+            if (isResponse) {
+                const statusName = STATUS_NAMES[status] || `Unknown(${status})`;
+                details += `\n  Status:       ${statusName} (${status})`;
+
+                // Extra fields for specific services
+                if (sidU32 === 0x04) {
+                    details += `\n  Log Level:    ${m[resultPtr + 32]}`;
+                }
+                if (sidU32 === 0x13) {
+                    const verLen = d.getUint32(resultPtr + 24, true);
+                    const verOff = d.getUint32(resultPtr + 28, true);
+                    if (verLen > 0 && verOff > 0) {
+                        const verBytes = mem().slice(dataPtr + verOff, dataPtr + verOff + verLen);
+                        details += `\n  SW Version:   "${bytesToAscii(verBytes)}" (${verLen} bytes)`;
+                    }
+                }
+            } else {
+                // Request extra fields
+                if (sidU32 === 0x01) {
+                    const tApp = bytesToAscii(m.slice(resultPtr + 24, resultPtr + 28));
+                    const tCtx = bytesToAscii(m.slice(resultPtr + 28, resultPtr + 32));
+                    const lvl = m[resultPtr + 32];
+                    details += `\n  Target App:   "${tApp}"\n  Target Ctx:   "${tCtx}"\n  Log Level:    ${lvl}`;
+                }
+                if (sidU32 === 0x03) {
+                    const tApp = bytesToAscii(m.slice(resultPtr + 24, resultPtr + 28));
+                    const tCtx = bytesToAscii(m.slice(resultPtr + 28, resultPtr + 32));
+                    const opts = m[resultPtr + 32];
+                    details += `\n  Options:      ${opts}\n  Target App:   "${tApp}"\n  Target Ctx:   "${tCtx}"`;
+                }
+            }
+        } else {
+            // Log or other message
+            details = `<span class="badge badge-log">${mstpName}</span> <strong>${mstpName} Message</strong>`;
+        }
+
+        out(`<div class="status info">
+            <pre><strong>Parsed DLT Message</strong>
+  ECU:          "${ecuId}"
+  App:          "${appId}"
+  Ctx:          "${ctxId}"
+  MSTP:         ${mstpName} (${mstp})
+  MTIN:         ${mtin}
+  Payload:      ${payloadLen} bytes (offset ${payloadOff})
+
+${details}</pre></div>`);
+    }
+
+    function parseLastGenerated() {
+        if (!lastGeneratedPtr || !lastGeneratedSize) {
+            out(`<div class="status err">No generated message to parse. Generate one first.</div>`);
+            return;
+        }
+        doParse(lastGeneratedPtr, lastGeneratedSize);
+    }
+
+    function parseHexMessage() {
+        const hexStr = document.getElementById('parse-hex').value.trim();
+        if (!hexStr) {
+            out(`<div class="status err">Enter hex bytes to parse.</div>`);
+            return;
+        }
+
+        const bytes = hexStr.split(/[\s,]+/).map(h => parseInt(h, 16)).filter(n => !isNaN(n));
+        if (bytes.length < 4) {
+            out(`<div class="status err">Need at least 4 hex bytes.</div>`);
+            return;
+        }
+
+        wasm.reset_allocator();
+        const ptr = wasm.allocate(bytes.length);
+        mem().set(bytes, ptr);
+
+        lastGeneratedPtr = ptr;
+        lastGeneratedSize = bytes.length;
+
+        doParse(ptr, bytes.length);
+    }
+
+    // ---- Load WASM ----
+    async function loadWasm() {
+        try {
+            const resp = await fetch(`../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm?v=${Date.now()}`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const buf = await resp.arrayBuffer();
+            const result = await WebAssembly.instantiate(buf, {});
+            wasm = result.instance.exports;
+
+            document.getElementById('load-status').className = 'status ok';
+            document.getElementById('load-status').textContent =
+                `WASM loaded — heap: ${wasm.get_heap_capacity()} bytes, version: ${wasm.get_version()}`;
+            document.getElementById('app').style.display = 'block';
+        } catch (e) {
+            document.getElementById('load-status').className = 'status err';
+            document.getElementById('load-status').textContent = `WASM load failed: ${e.message}`;
+        }
+    }
+
+    loadWasm();
+    </script>
+</body>
+</html>
