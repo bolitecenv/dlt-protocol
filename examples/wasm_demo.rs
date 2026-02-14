@@ -1,5 +1,5 @@
 #![cfg_attr(not(target_arch = "wasm32"), no_std)]
-#![no_main]
+#![cfg_attr(target_arch = "wasm32", no_main)]
 
 #[cfg(target_arch = "wasm32")]
 extern crate std;
@@ -122,12 +122,12 @@ pub extern "C" fn analyze_dlt_message(buffer_ptr: *const u8, buffer_len: usize) 
     let (msg_type, mstp, log_level, is_verbose, app_id, ctx_id) = if let Some(ext_hdr) = parsed_msg.extended_header {
         let msin = ext_hdr.msin;
         
-        // Use r19-11's MstpType::parse to extract message type from bits 7-4
-        let mstp_raw = (msin >> 4) & 0x0F;
+        // Use r19-11's MstpType::parse to extract message type from bits 1-3 (per spec)
+        let mstp_raw = (msin >> 1) & 0x07;  // 3 bits at position 1-3
         let mstp_type = MstpType::parse(mstp_raw);
         
-        // Use r19-11's Mtin::parse to properly decode MTIN bits based on MSTP
-        let mtin_raw = (msin >> 1) & 0x07;
+        // Use r19-11's Mtin::parse to properly decode MTIN bits from bits 4-7 (per spec)
+        let mtin_raw = (msin >> 4) & 0x0F;  // 4 bits at position 4-7
         let mtin = Mtin::parse(&mstp_type, mtin_raw);
         
         // Extract verbose flag (bit 0)
@@ -648,4 +648,9 @@ pub extern "C" fn get_heap_capacity() -> usize {
         let heap_ptr = core::ptr::addr_of!(HEAP);
         (*heap_ptr).len()
     }
+}
+/// Dummy main for non-WASM builds (allows cargo test to compile)
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    panic!("wasm_demo is only meant to be built for wasm32-unknown-unknown target");
 }

@@ -107,10 +107,20 @@ fn test_generate_log_message_with_payload() {
     // Verify verbose bit is set
     assert_eq!(buffer[16] & 0x01, 0x01);
 
-    // Verify payload
+    // Verify payload with type info (verbose mode uses PayloadBuilder)
     let header_size = 26;
-    assert_eq!(&buffer[header_size..header_size + payload.len()], payload);
-    assert_eq!(total_len, header_size + payload.len());
+    // In verbose mode, PayloadBuilder adds:
+    // - 4 bytes: type info (String type)
+    // - 2 bytes: string length (including null terminator)
+    // - N bytes: string data
+    // - 1 byte: null terminator
+    let expected_payload_size = 4 + 2 + payload.len() + 1;
+    assert_eq!(total_len, header_size + expected_payload_size);
+    
+    // Verify the string payload (skip type info and length, check string data)
+    let payload_start = header_size + 4 + 2; // skip type info and length
+    assert_eq!(&buffer[payload_start..payload_start + payload.len()], payload);
+    assert_eq!(buffer[payload_start + payload.len()], 0); // null terminator
 }
 
 #[test]
@@ -1091,10 +1101,10 @@ fn test_parse_with_all_extra_fields() {
     buffer[offset..offset + 4].copy_from_slice(b"TEST");
     offset += 4;
     
-    buffer[offset..offset + 4].copy_from_slice(&1234u32.to_le_bytes());
+    buffer[offset..offset + 4].copy_from_slice(&1234u32.to_be_bytes());
     offset += 4;
     
-    buffer[offset..offset + 4].copy_from_slice(&5678u32.to_le_bytes());
+    buffer[offset..offset + 4].copy_from_slice(&5678u32.to_be_bytes());
     offset += 4;
     
     let mut parser = DltHeaderParser::new(&buffer[..offset]);
@@ -1238,7 +1248,7 @@ fn test_parse_big_endian_message() {
 #[test]
 fn test_parse_extended_header_helpers() {
     let ext = DltExtendedHeader {
-        msin: 0x41, // Verbose + Log Info (0100 0001)
+        msin: 0x41, // Per DLT R19-11: Bit 0=VERB(1), Bits 1-3=MSTP(0), Bits 4-7=MTIN(4)
         noar: 5,
         apid: *b"TEST",
         ctid: *b"TST1",
@@ -1427,3 +1437,580 @@ fn test_parse_real_world_packet_data() {
     assert!(message_count >= 4, "Expected to parse at least 4 messages from real-world data");
 }
 
+#[test]
+fn test_recreate_real_world_verbose_message() {
+    // Real-world message bytes from captured DLT traffic:
+    // MSIN byte is 0x41 which is CORRECT per DLT R19-11 spec
+    #[allow(dead_code)]
+    let original_bytes: [u8; 79] = [
+        0x3D, 0x0E, 0x00, 0x4F, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 
+        0x82, 0x70, 0x6C, 0xAB, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 
+        0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x2F, 0x00, 0x43, 0x6C, 0x69, 0x65, 
+        0x6E, 0x74, 0x20, 0x63, 0x6F, 0x6E, 0x6E, 0x65, 0x63, 0x74, 0x69, 0x6F, 
+        0x6E, 0x20, 0x23, 0x37, 0x20, 0x63, 0x6C, 0x6F, 0x73, 0x65, 0x64, 0x2E, 
+        0x20, 0x54, 0x6F, 0x74, 0x61, 0x6C, 0x20, 0x43, 0x6C, 0x69, 0x65, 0x6E, 
+        0x74, 0x73, 0x20, 0x3A, 0x20, 0x30, 0x00,
+    ];
+
+    // Recreate the message with current (fixed) builder
+    let mut buffer = [0u8; 128];
+    
+    // The payload text - generate_log_message_with_payload will handle encoding with PayloadBuilder
+    let payload_text = "Client connection #7 closed. Total Clients : 0";
+    
+    // Create message with matching parameters
+    let mut builder = DltMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"DLTD")
+        .with_context_id(b"INTM")
+        .with_session_id(0x67570200)
+        .with_timestamp(0xAB6C7082)
+        .msg_counter(14); // Match the original message counter
+    
+    builder.set_endian(DltEndian::Little); // Original message uses little-endian
+    
+    let total = builder.generate_log_message_with_payload(
+        &mut buffer,
+        payload_text.as_bytes(), // Pass raw string bytes
+        MtinTypeDltLog::DltLogInfo,
+        1,
+        true, // verbose mode - will use PayloadBuilder internally
+    ).unwrap();
+    
+    // Verify key fields match
+    assert_eq!(buffer[1], 14); // Message counter
+    assert_eq!(&buffer[4..8], b"ECU1"); // ECU ID
+    assert_eq!(buffer[8..12], 0x67570200u32.to_be_bytes()); // Session ID
+    assert_eq!(buffer[12..16], 0xAB6C7082u32.to_be_bytes()); // Timestamp
+    
+    // MSIN byte per DLT R19-11 spec:
+    // Bit 0: VERB=1, Bits 1-3: MSTP=0 (Log), Bits 4-7: MTIN=4 (Info)
+    // Binary: 0100 0001 = 0x41
+    assert_eq!(buffer[16], 0x41, "MSIN byte per DLT R19-11 spec");
+    
+    assert_eq!(buffer[17], 1); // NOAR
+    assert_eq!(&buffer[18..22], b"DLTD"); // App ID
+    assert_eq!(&buffer[22..26], b"INTM"); // Context ID
+    
+    // Verify we can parse it back correctly
+    let mut parser = DltHeaderParser::new(&buffer[..total]);
+    let msg = parser.parse_message().unwrap();
+    
+    assert_eq!(msg.ecu_id, Some(*b"ECU1"));
+    assert_eq!(msg.session_id, Some(0x67570200));
+    assert_eq!(msg.timestamp, Some(0xAB6C7082));
+    
+    let ext = msg.extended_header.unwrap();
+    assert_eq!(ext.apid, *b"DLTD");
+    assert_eq!(ext.ctid, *b"INTM");
+    assert_eq!(ext.is_verbose(), true); // Now using verbose mode
+    assert_eq!(ext.message_type(), MstpType::DltTypeLog);
+    
+    // Parse the verbose payload
+    let mut pp = PayloadParser::new(msg.payload);
+    assert_eq!(pp.read_string().unwrap(), payload_text);
+
+    // Length of generated message
+    println!("Generated message length: {}", total);
+    // For comparison, length of original message
+    println!("Original message length: {}", original_bytes.len());
+    assert_eq!(total, original_bytes.len(), "Generated message length should match original");
+    
+    // The original real-world message had MSIN=0x41, which is CORRECT per DLT R19-11:
+    // Bit 0: VERB=1, Bits 1-3: MSTP=0 (Log), Bits 4-7: MTIN=4 (Info)
+    println!("Generated MSIN: 0x{:02x} (per DLT R19-11 spec)", buffer[16]);
+    println!("Original MSIN:  0x41 (also correct)");
+}
+
+// ========================================
+// Service Message Tests
+// ========================================
+
+#[test]
+fn test_generate_set_log_level_request() {
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"SYS\0")
+        .with_context_id(b"MGMT");
+
+    let mut buffer = [0u8; 256];
+    let result = builder.generate_set_log_level_request(
+        &mut buffer,
+        b"APP1",
+        b"CTX1",
+        4, // Info level
+    );
+
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    // Parse the message back
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    
+    // Verify it's a control message
+    let ext = msg.extended_header.unwrap();
+    assert_eq!(ext.message_type(), MstpType::DltTypeControl);
+    assert_eq!(ext.is_verbose(), false); // Control messages are non-verbose
+    
+    // Parse service payload
+    let service_parser = DltServiceParser::new(msg.payload);
+    let service_id = service_parser.parse_service_id().unwrap();
+    assert_eq!(service_id, ServiceId::SetLogLevel);
+    
+    let (app_id, ctx_id, log_level) = service_parser.parse_set_log_level_request().unwrap();
+    assert_eq!(&app_id, b"APP1");
+    assert_eq!(&ctx_id, b"CTX1");
+    assert_eq!(log_level, 4);
+}
+
+#[test]
+fn test_generate_get_software_version_request() {
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"SYS\0")
+        .with_context_id(b"MGMT");
+
+    let mut buffer = [0u8; 256];
+    let result = builder.generate_get_software_version_request(&mut buffer);
+
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    // Parse the message
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    
+    let service_parser = DltServiceParser::new(msg.payload);
+    let service_id = service_parser.parse_service_id().unwrap();
+    assert_eq!(service_id, ServiceId::GetSoftwareVersion);
+}
+
+#[test]
+fn test_generate_status_response() {
+    let mut builder = DltServiceMessageBuilder::new();
+    let mut buffer = [0u8; 256];
+    
+    let result = builder.generate_status_response(
+        &mut buffer,
+        ServiceId::StoreConfiguration,
+        ServiceStatus::Ok,
+    );
+
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    // Parse and verify
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    
+    let service_parser = DltServiceParser::new(msg.payload);
+    let service_id = service_parser.parse_service_id().unwrap();
+    assert_eq!(service_id, ServiceId::StoreConfiguration);
+    
+    let status = service_parser.parse_status_response().unwrap();
+    assert_eq!(status, ServiceStatus::Ok);
+}
+
+#[test]
+fn test_generate_get_software_version_response() {
+    let mut builder = DltServiceMessageBuilder::new();
+    let mut buffer = [0u8; 256];
+    let sw_version = b"DLT v1.2.3";
+    
+    let result = builder.generate_get_software_version_response(
+        &mut buffer,
+        ServiceStatus::Ok,
+        sw_version,
+    );
+
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    // Parse and verify
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    
+    let service_parser = DltServiceParser::new(msg.payload);
+    let (status, version) = service_parser.parse_get_software_version_response().unwrap();
+    assert_eq!(status, ServiceStatus::Ok);
+    assert_eq!(version, sw_version);
+}
+
+#[test]
+fn test_parse_set_trace_status_request() {
+    let mut builder = DltServiceMessageBuilder::new();
+    let mut buffer = [0u8; 256];
+    
+    let result = builder.generate_set_trace_status_request(
+        &mut buffer,
+        b"MYAP",
+        b"MYCT",
+        1, // On
+    );
+
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    
+    let service_parser = DltServiceParser::new(msg.payload);
+    let (app_id, ctx_id, trace_status) = service_parser.parse_set_trace_status_request().unwrap();
+    assert_eq!(&app_id, b"MYAP");
+    assert_eq!(&ctx_id, b"MYCT");
+    assert_eq!(trace_status, 1);
+}
+
+#[test]
+fn test_parse_get_log_info_request() {
+    let mut builder = DltServiceMessageBuilder::new();
+    let mut buffer = [0u8; 256];
+    
+    let result = builder.generate_get_log_info_request(
+        &mut buffer,
+        7, // With descriptions
+        b"APP1",
+        b"\0\0\0\0", // All contexts
+    );
+
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    
+    let service_parser = DltServiceParser::new(msg.payload);
+    let (options, app_id, ctx_id) = service_parser.parse_get_log_info_request().unwrap();
+    assert_eq!(options, 7);
+    assert_eq!(&app_id, b"APP1");
+    assert_eq!(&ctx_id, b"\0\0\0\0");
+    assert!(is_wildcard_id(&ctx_id));
+}
+
+#[test]
+fn test_service_id_parsing() {
+    let mut buffer = [0u8; 256];
+    
+    // Test SetLogLevel
+    {
+        let mut builder = DltServiceMessageBuilder::new();
+        let result = builder.generate_set_log_level_request(&mut buffer, b"APP\0", b"CTX\0", 4);
+        assert!(result.is_ok());
+        let size = result.unwrap();
+        
+        let mut parser = DltHeaderParser::new(&buffer[..size]);
+        let msg = parser.parse_message().unwrap();
+        
+        let service_parser = DltServiceParser::new(msg.payload);
+        let parsed_id = service_parser.parse_service_id().unwrap();
+        assert_eq!(parsed_id, ServiceId::SetLogLevel);
+    }
+    
+    // Test GetDefaultLogLevel
+    {
+        let mut builder = DltServiceMessageBuilder::new();
+        let result = builder.generate_get_default_log_level_request(&mut buffer);
+        assert!(result.is_ok());
+        let size = result.unwrap();
+        
+        let mut parser = DltHeaderParser::new(&buffer[..size]);
+        let msg = parser.parse_message().unwrap();
+        
+        let service_parser = DltServiceParser::new(msg.payload);
+        let parsed_id = service_parser.parse_service_id().unwrap();
+        assert_eq!(parsed_id, ServiceId::GetDefaultLogLevel);
+    }
+    
+    // Test StoreConfiguration
+    {
+        let mut builder = DltServiceMessageBuilder::new();
+        let result = builder.generate_store_configuration_request(&mut buffer);
+        assert!(result.is_ok());
+        let size = result.unwrap();
+        
+        let mut parser = DltHeaderParser::new(&buffer[..size]);
+        let msg = parser.parse_message().unwrap();
+        
+        let service_parser = DltServiceParser::new(msg.payload);
+        let parsed_id = service_parser.parse_service_id().unwrap();
+        assert_eq!(parsed_id, ServiceId::StoreConfiguration);
+    }
+    
+    // Test ResetToFactoryDefault
+    {
+        let mut builder = DltServiceMessageBuilder::new();
+        let result = builder.generate_reset_to_factory_default_request(&mut buffer);
+        assert!(result.is_ok());
+        let size = result.unwrap();
+        
+        let mut parser = DltHeaderParser::new(&buffer[..size]);
+        let msg = parser.parse_message().unwrap();
+        
+        let service_parser = DltServiceParser::new(msg.payload);
+        let parsed_id = service_parser.parse_service_id().unwrap();
+        assert_eq!(parsed_id, ServiceId::ResetToFactoryDefault);
+    }
+    
+    // Test SetMessageFiltering
+    {
+        let mut builder = DltServiceMessageBuilder::new();
+        let result = builder.generate_set_message_filtering_request(&mut buffer, true);
+        assert!(result.is_ok());
+        let size = result.unwrap();
+        
+        let mut parser = DltHeaderParser::new(&buffer[..size]);
+        let msg = parser.parse_message().unwrap();
+        
+        let service_parser = DltServiceParser::new(msg.payload);
+        let parsed_id = service_parser.parse_service_id().unwrap();
+        assert_eq!(parsed_id, ServiceId::SetMessageFiltering);
+    }
+}
+
+#[test]
+fn test_service_message_with_serial_header() {
+    let mut builder = DltServiceMessageBuilder::new()
+        .add_serial_header();
+    
+    let mut buffer = [0u8; 256];
+    let result = builder.generate_get_default_log_level_request(&mut buffer);
+    
+    assert!(result.is_ok());
+    let size = result.unwrap();
+    
+    // Verify serial header is present
+    assert_eq!(&buffer[0..4], &DLT_SERIAL_HEADER_ARRAY);
+    
+    // Parse the message
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let msg = parser.parse_message().unwrap();
+    assert!(msg.has_serial_header);
+}
+
+#[test]
+fn test_service_counter_increment() {
+    let mut builder = DltServiceMessageBuilder::new();
+    let mut buffer = [0u8; 256];
+    
+    assert_eq!(builder.get_counter(), 0);
+    
+    builder.generate_get_default_log_level_request(&mut buffer).unwrap();
+    assert_eq!(builder.get_counter(), 1);
+    
+    builder.generate_store_configuration_request(&mut buffer).unwrap();
+    assert_eq!(builder.get_counter(), 2);
+    
+    builder.reset_counter();
+    assert_eq!(builder.get_counter(), 0);
+}
+
+#[test]
+fn test_wildcard_id_helper() {
+    assert!(is_wildcard_id(&[0, 0, 0, 0]));
+    assert!(!is_wildcard_id(b"APP1"));
+    assert!(!is_wildcard_id(&[0, 0, 0, 1]));
+}
+
+#[test]
+fn test_id_to_string_helper() {
+    assert_eq!(id_to_string(b"APP1").unwrap(), "APP1");
+    assert_eq!(id_to_string(b"APP\0").unwrap(), "APP");
+    assert_eq!(id_to_string(&[0x41, 0x42, 0x43, 0x00]).unwrap(), "ABC");
+}
+#[test]
+fn test_get_log_info_payload_writer_option_6() {
+    // Test option 6: with log level and trace status (no descriptions)
+    let mut payload_buffer = [0u8; 1024];
+    let mut writer = LogInfoPayloadWriter::new(&mut payload_buffer, false);
+
+    // Write 2 applications
+    writer.write_app_count(2).unwrap();
+
+    // App 1: APP1 with 2 contexts
+    writer.write_app_id(b"APP1").unwrap();
+    writer.write_context_count(2).unwrap();
+    writer.write_context(b"CTX1", 4, 1, None).unwrap(); // INFO level, trace on
+    writer.write_context(b"CTX2", 5, 0, None).unwrap(); // DEBUG level, trace off
+
+    // App 2: APP2 with 1 context
+    writer.write_app_id(b"APP2").unwrap();
+    writer.write_context_count(1).unwrap();
+    writer.write_context(b"CTX3", 2, 1, None).unwrap(); // ERROR level, trace on
+
+    let payload_len = writer.finish().unwrap();
+
+    // Verify the structure
+    // App count (2 bytes)
+    assert_eq!(u16::from_be_bytes([payload_buffer[0], payload_buffer[1]]), 2);
+
+    // App 1
+    assert_eq!(&payload_buffer[2..6], b"APP1");
+    assert_eq!(u16::from_be_bytes([payload_buffer[6], payload_buffer[7]]), 2); // 2 contexts
+
+    // Context 1
+    assert_eq!(&payload_buffer[8..12], b"CTX1");
+    assert_eq!(payload_buffer[12], 4); // log level
+    assert_eq!(payload_buffer[13], 1); // trace status
+
+    // Context 2
+    assert_eq!(&payload_buffer[14..18], b"CTX2");
+    assert_eq!(payload_buffer[18], 5); // log level
+    assert_eq!(payload_buffer[19], 0); // trace status
+
+    // App 2
+    assert_eq!(&payload_buffer[20..24], b"APP2");
+    assert_eq!(u16::from_be_bytes([payload_buffer[24], payload_buffer[25]]), 1); // 1 context
+
+    // Context 3
+    assert_eq!(&payload_buffer[26..30], b"CTX3");
+    assert_eq!(payload_buffer[30], 2); // log level
+    assert_eq!(payload_buffer[31], 1); // trace status
+
+    assert_eq!(payload_len, 32);
+
+    // Now test parsing it back
+    let mut parser = LogInfoResponseParser::new(&payload_buffer[..payload_len], false);
+    
+    let app_count = parser.read_app_count().unwrap();
+    assert_eq!(app_count, 2);
+
+    // Parse App 1
+    let app1_id = parser.read_app_id().unwrap();
+    assert_eq!(&app1_id, b"APP1");
+    let ctx_count = parser.read_context_count().unwrap();
+    assert_eq!(ctx_count, 2);
+
+    let (ctx1_id, log_lvl, trace) = parser.read_context_info().unwrap();
+    assert_eq!(&ctx1_id, b"CTX1");
+    assert_eq!(log_lvl, 4);
+    assert_eq!(trace, 1);
+
+    let (ctx2_id, log_lvl, trace) = parser.read_context_info().unwrap();
+    assert_eq!(&ctx2_id, b"CTX2");
+    assert_eq!(log_lvl, 5);
+    assert_eq!(trace, 0);
+
+    // Parse App 2
+    let app2_id = parser.read_app_id().unwrap();
+    assert_eq!(&app2_id, b"APP2");
+    let ctx_count = parser.read_context_count().unwrap();
+    assert_eq!(ctx_count, 1);
+
+    let (ctx3_id, log_lvl, trace) = parser.read_context_info().unwrap();
+    assert_eq!(&ctx3_id, b"CTX3");
+    assert_eq!(log_lvl, 2);
+    assert_eq!(trace, 1);
+
+    assert!(!parser.has_remaining());
+}
+
+#[test]
+fn test_get_log_info_payload_writer_option_7() {
+    // Test option 7: with descriptions
+    let mut payload_buffer = [0u8; 1024];
+    let mut writer = LogInfoPayloadWriter::new(&mut payload_buffer, true);
+
+    // Write 1 application
+    writer.write_app_count(1).unwrap();
+
+    // App 1: APP1 with 1 context
+    writer.write_app_id(b"APP1").unwrap();
+    writer.write_context_count(1).unwrap();
+    writer.write_context(b"CTX1", 4, 1, Some(b"Test context")).unwrap();
+    writer.write_app_description(Some(b"Test application")).unwrap();
+
+    let payload_len = writer.finish().unwrap();
+
+    // Parse it back
+    let mut parser = LogInfoResponseParser::new(&payload_buffer[..payload_len], true);
+    
+    let app_count = parser.read_app_count().unwrap();
+    assert_eq!(app_count, 1);
+
+    let app_id = parser.read_app_id().unwrap();
+    assert_eq!(&app_id, b"APP1");
+
+    let ctx_count = parser.read_context_count().unwrap();
+    assert_eq!(ctx_count, 1);
+
+    let (ctx_id, log_lvl, trace) = parser.read_context_info().unwrap();
+    assert_eq!(&ctx_id, b"CTX1");
+    assert_eq!(log_lvl, 4);
+    assert_eq!(trace, 1);
+
+    let ctx_desc = parser.read_description().unwrap();
+    assert_eq!(ctx_desc, b"Test context");
+
+    let app_desc = parser.read_description().unwrap();
+    assert_eq!(app_desc, b"Test application");
+
+    assert!(!parser.has_remaining());
+}
+
+#[test]
+fn test_get_log_info_full_message() {
+    // Test complete GetLogInfo response message generation and parsing
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"DMND")
+        .with_context_id(b"CORE");
+
+    // Build the log info payload
+    let mut payload_buffer = [0u8; 512];
+    let mut writer = LogInfoPayloadWriter::new(&mut payload_buffer, false);
+    
+    writer.write_app_count(1).unwrap();
+    writer.write_app_id(b"APP1").unwrap();
+    writer.write_context_count(2).unwrap();
+    writer.write_context(b"CTX1", 4, 1, None).unwrap();
+    writer.write_context(b"CTX2", 5, 0, None).unwrap();
+    
+    let payload_len = writer.finish().unwrap();
+
+    // Generate the complete DLT message
+    let mut message_buffer = [0u8; 1024];
+    let msg_len = builder.generate_get_log_info_response(
+        &mut message_buffer,
+        ServiceStatus::WithLogLevelAndTraceStatus,
+        &payload_buffer[..payload_len]
+    ).unwrap();
+
+    // Parse the message headers
+    let mut parser = DltHeaderParser::new(&message_buffer[..msg_len]);
+    let message = parser.parse_message().unwrap();
+
+    // Verify it's a control message
+    assert!(message.extended_header.is_some());
+    let ext_hdr = message.extended_header.unwrap();
+    assert_eq!(ext_hdr.message_type(), MstpType::DltTypeControl);
+
+    // Parse the service payload
+    let service_parser = DltServiceParser::new(message.payload);
+    let service_id = service_parser.parse_service_id().unwrap();
+    assert_eq!(service_id, ServiceId::GetLogInfo);
+
+    let (status, log_info_data) = service_parser.parse_get_log_info_response().unwrap();
+    assert_eq!(status, ServiceStatus::WithLogLevelAndTraceStatus);
+
+    // Parse the log info data
+    let mut log_info_parser = LogInfoResponseParser::new(log_info_data, false);
+    let app_count = log_info_parser.read_app_count().unwrap();
+    assert_eq!(app_count, 1);
+
+    let app_id = log_info_parser.read_app_id().unwrap();
+    assert_eq!(&app_id, b"APP1");
+
+    let ctx_count = log_info_parser.read_context_count().unwrap();
+    assert_eq!(ctx_count, 2);
+
+    let (ctx1_id, lvl1, trace1) = log_info_parser.read_context_info().unwrap();
+    assert_eq!(&ctx1_id, b"CTX1");
+    assert_eq!(lvl1, 4);
+    assert_eq!(trace1, 1);
+
+    let (ctx2_id, lvl2, trace2) = log_info_parser.read_context_info().unwrap();
+    assert_eq!(&ctx2_id, b"CTX2");
+    assert_eq!(lvl2, 5);
+    assert_eq!(trace2, 0);
+}
