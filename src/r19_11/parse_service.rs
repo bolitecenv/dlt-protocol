@@ -76,7 +76,7 @@ pub struct LogInfoApp<'a> {
 /// Parser for DLT service/control message payloads
 ///
 /// Service messages have a simple structure:
-/// - Service ID (4 bytes, big-endian u32)
+/// - Service ID (4 bytes, little-endian u32)
 /// - Parameters (variable length, service-specific)
 ///
 /// # Example
@@ -108,13 +108,13 @@ impl<'a> DltServiceParser<'a> {
 
     /// Parse the service ID from the payload
     ///
-    /// Service ID is always the first 4 bytes (big-endian u32)
+    /// Service ID is always the first 4 bytes (little-endian u32)
     pub fn parse_service_id(&self) -> Result<ServiceId, DltError> {
         if self.data.len() < 4 {
             return Err(DltError::BufferTooSmall);
         }
 
-        let service_id_value = u32::from_be_bytes([
+        let service_id_value = u32::from_le_bytes([
             self.data[0],
             self.data[1],
             self.data[2],
@@ -130,7 +130,7 @@ impl<'a> DltServiceParser<'a> {
             return Err(DltError::BufferTooSmall);
         }
 
-        Ok(u32::from_be_bytes([
+        Ok(u32::from_le_bytes([
             self.data[0],
             self.data[1],
             self.data[2],
@@ -316,7 +316,7 @@ impl<'a> DltServiceParser<'a> {
 
         let status = ServiceStatus::from_u8(self.data[4]).ok_or(DltError::InvalidParameter)?;
         
-        let length = u32::from_be_bytes([
+        let length = u32::from_le_bytes([
             self.data[5],
             self.data[6],
             self.data[7],
@@ -411,7 +411,7 @@ impl<'a> DltServiceParser<'a> {
 
         let status = ServiceStatus::from_u8(self.data[4]).ok_or(DltError::InvalidParameter)?;
         
-        let overflow_counter = u32::from_be_bytes([
+        let overflow_counter = u32::from_le_bytes([
             self.data[5],
             self.data[6],
             self.data[7],
@@ -440,12 +440,12 @@ impl<'a> DltServiceParser<'a> {
         Ok(value)
     }
 
-    /// Read a u16 (big-endian) at current position and advance
-    pub fn read_u16_be(&mut self) -> Result<u16, DltError> {
+    /// Read a u16 (little-endian) at current position and advance
+    pub fn read_u16_le(&mut self) -> Result<u16, DltError> {
         if self.position + 2 > self.data.len() {
             return Err(DltError::BufferTooSmall);
         }
-        let value = u16::from_be_bytes([
+        let value = u16::from_le_bytes([
             self.data[self.position],
             self.data[self.position + 1],
         ]);
@@ -453,12 +453,12 @@ impl<'a> DltServiceParser<'a> {
         Ok(value)
     }
 
-    /// Read a u32 (big-endian) at current position and advance
-    pub fn read_u32_be(&mut self) -> Result<u32, DltError> {
+    /// Read a u32 (little-endian) at current position and advance
+    pub fn read_u32_le(&mut self) -> Result<u32, DltError> {
         if self.position + 4 > self.data.len() {
             return Err(DltError::BufferTooSmall);
         }
-        let value = u32::from_be_bytes([
+        let value = u32::from_le_bytes([
             self.data[self.position],
             self.data[self.position + 1],
             self.data[self.position + 2],
@@ -547,7 +547,7 @@ impl<'a> LogInfoResponseParser<'a> {
         if self.position + 2 > self.data.len() {
             return Err(DltError::BufferTooSmall);
         }
-        let count = u16::from_be_bytes([self.data[self.position], self.data[self.position + 1]]);
+        let count = u16::from_le_bytes([self.data[self.position], self.data[self.position + 1]]);
         self.position += 2;
         Ok(count)
     }
@@ -568,7 +568,7 @@ impl<'a> LogInfoResponseParser<'a> {
         if self.position + 2 > self.data.len() {
             return Err(DltError::BufferTooSmall);
         }
-        let count = u16::from_be_bytes([self.data[self.position], self.data[self.position + 1]]);
+        let count = u16::from_le_bytes([self.data[self.position], self.data[self.position + 1]]);
         self.position += 2;
         Ok(count)
     }
@@ -599,7 +599,7 @@ impl<'a> LogInfoResponseParser<'a> {
             return Err(DltError::BufferTooSmall);
         }
 
-        let len = u16::from_be_bytes([self.data[self.position], self.data[self.position + 1]]) as usize;
+        let len = u16::from_le_bytes([self.data[self.position], self.data[self.position + 1]]) as usize;
         self.position += 2;
 
         if self.position + len > self.data.len() {

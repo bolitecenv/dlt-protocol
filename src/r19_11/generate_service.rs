@@ -252,8 +252,8 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 17]; // 4 (service ID) + 4 (app) + 4 (ctx) + 1 (level) + 4 (reserved)
         
-        // Service ID (32-bit, big-endian)
-        payload[0..4].copy_from_slice(&ServiceId::SetLogLevel.to_u32().to_be_bytes());
+        // Service ID (32-bit, little-endian per COVESA/DLT specification)
+        payload[0..4].copy_from_slice(&ServiceId::SetLogLevel.to_u32().to_le_bytes());
         
         // Application ID
         payload[4..8].copy_from_slice(app_id);
@@ -286,7 +286,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 17];
         
-        payload[0..4].copy_from_slice(&ServiceId::SetTraceStatus.to_u32().to_be_bytes());
+        payload[0..4].copy_from_slice(&ServiceId::SetTraceStatus.to_u32().to_le_bytes());
         payload[4..8].copy_from_slice(app_id);
         payload[8..12].copy_from_slice(ctx_id);
         payload[12] = trace_status as u8;
@@ -311,7 +311,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 17];
         
-        payload[0..4].copy_from_slice(&ServiceId::GetLogInfo.to_u32().to_be_bytes());
+        payload[0..4].copy_from_slice(&ServiceId::GetLogInfo.to_u32().to_le_bytes());
         payload[4] = options;
         payload[5..9].copy_from_slice(app_id);
         payload[9..13].copy_from_slice(ctx_id);
@@ -325,7 +325,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
     ) -> Result<usize, DltError> {
-        let payload = ServiceId::GetDefaultLogLevel.to_u32().to_be_bytes();
+        let payload = ServiceId::GetDefaultLogLevel.to_u32().to_le_bytes();
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
 
@@ -334,7 +334,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
     ) -> Result<usize, DltError> {
-        let payload = ServiceId::StoreConfiguration.to_u32().to_be_bytes();
+        let payload = ServiceId::StoreConfiguration.to_u32().to_le_bytes();
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
 
@@ -343,7 +343,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
     ) -> Result<usize, DltError> {
-        let payload = ServiceId::ResetToFactoryDefault.to_u32().to_be_bytes();
+        let payload = ServiceId::ResetToFactoryDefault.to_u32().to_le_bytes();
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
 
@@ -359,7 +359,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 5];
         
-        payload[0..4].copy_from_slice(&ServiceId::SetMessageFiltering.to_u32().to_be_bytes());
+        payload[0..4].copy_from_slice(&ServiceId::SetMessageFiltering.to_u32().to_le_bytes());
         payload[4] = if filtering_enabled { 1 } else { 0 };
         
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
@@ -377,7 +377,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 9];
         
-        payload[0..4].copy_from_slice(&ServiceId::SetDefaultLogLevel.to_u32().to_be_bytes());
+        payload[0..4].copy_from_slice(&ServiceId::SetDefaultLogLevel.to_u32().to_le_bytes());
         payload[4] = log_level as u8;
         payload[5..9].copy_from_slice(&DLT_SERVICE_SUFFIX);
         
@@ -389,7 +389,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         &mut self,
         buffer: &mut [u8],
     ) -> Result<usize, DltError> {
-        let payload = ServiceId::GetSoftwareVersion.to_u32().to_be_bytes();
+        let payload = ServiceId::GetSoftwareVersion.to_u32().to_le_bytes();
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
 
@@ -411,7 +411,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 5];
         
-        payload[0..4].copy_from_slice(&service_id.to_u32().to_be_bytes());
+        payload[0..4].copy_from_slice(&service_id.to_u32().to_le_bytes());
         payload[4] = status.to_u8();
         
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlResponse)
@@ -426,7 +426,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let mut payload = [0u8; 6];
         
-        payload[0..4].copy_from_slice(&ServiceId::GetDefaultLogLevel.to_u32().to_be_bytes());
+        payload[0..4].copy_from_slice(&ServiceId::GetDefaultLogLevel.to_u32().to_le_bytes());
         payload[4] = status.to_u8();
         payload[5] = log_level;
         
@@ -452,9 +452,9 @@ impl<'a> DltServiceMessageBuilder<'a> {
         
         let mut temp_payload = [0u8; 256];
         
-        temp_payload[0..4].copy_from_slice(&ServiceId::GetSoftwareVersion.to_u32().to_be_bytes());
+        temp_payload[0..4].copy_from_slice(&ServiceId::GetSoftwareVersion.to_u32().to_le_bytes());
         temp_payload[4] = status.to_u8();
-        temp_payload[5..9].copy_from_slice(&(string_len_with_null as u32).to_be_bytes());
+        temp_payload[5..9].copy_from_slice(&(string_len_with_null as u32).to_le_bytes());
         temp_payload[9..9 + version_len].copy_from_slice(&sw_version[..version_len]);
         temp_payload[9 + version_len] = 0; // Null terminator
         
@@ -506,7 +506,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
             return Err(DltError::BufferTooSmall);
         }
         
-        temp_payload[0..4].copy_from_slice(&ServiceId::GetLogInfo.to_u32().to_be_bytes());
+        temp_payload[0..4].copy_from_slice(&ServiceId::GetLogInfo.to_u32().to_le_bytes());
         temp_payload[4] = status.to_u8();
         temp_payload[5..5 + log_info_payload.len()].copy_from_slice(log_info_payload);
         // Last 4 bytes are "remo" suffix
@@ -863,7 +863,7 @@ impl<'a> LogInfoPayloadWriter<'a> {
         if self.position + 2 > self.buffer.len() {
             return Err(DltError::BufferTooSmall);
         }
-        self.buffer[self.position..self.position + 2].copy_from_slice(&count.to_be_bytes());
+        self.buffer[self.position..self.position + 2].copy_from_slice(&count.to_le_bytes());
         self.position += 2;
         Ok(())
     }
@@ -886,7 +886,7 @@ impl<'a> LogInfoPayloadWriter<'a> {
         if self.position + 2 > self.buffer.len() {
             return Err(DltError::BufferTooSmall);
         }
-        self.buffer[self.position..self.position + 2].copy_from_slice(&count.to_be_bytes());
+        self.buffer[self.position..self.position + 2].copy_from_slice(&count.to_le_bytes());
         self.position += 2;
         Ok(())
     }
@@ -918,7 +918,7 @@ impl<'a> LogInfoPayloadWriter<'a> {
                 if self.position + 2 + desc_len as usize > self.buffer.len() {
                     return Err(DltError::BufferTooSmall);
                 }
-                self.buffer[self.position..self.position + 2].copy_from_slice(&desc_len.to_be_bytes());
+                self.buffer[self.position..self.position + 2].copy_from_slice(&desc_len.to_le_bytes());
                 self.position += 2;
                 self.buffer[self.position..self.position + desc_len as usize].copy_from_slice(&desc[..desc_len as usize]);
                 self.position += desc_len as usize;
@@ -927,7 +927,7 @@ impl<'a> LogInfoPayloadWriter<'a> {
                 if self.position + 2 > self.buffer.len() {
                     return Err(DltError::BufferTooSmall);
                 }
-                self.buffer[self.position..self.position + 2].copy_from_slice(&0u16.to_be_bytes());
+                self.buffer[self.position..self.position + 2].copy_from_slice(&0u16.to_le_bytes());
                 self.position += 2;
             }
         }
@@ -946,7 +946,7 @@ impl<'a> LogInfoPayloadWriter<'a> {
             if self.position + 2 + desc_len as usize > self.buffer.len() {
                 return Err(DltError::BufferTooSmall);
             }
-            self.buffer[self.position..self.position + 2].copy_from_slice(&desc_len.to_be_bytes());
+            self.buffer[self.position..self.position + 2].copy_from_slice(&desc_len.to_le_bytes());
             self.position += 2;
             self.buffer[self.position..self.position + desc_len as usize].copy_from_slice(&desc[..desc_len as usize]);
             self.position += desc_len as usize;
@@ -955,7 +955,7 @@ impl<'a> LogInfoPayloadWriter<'a> {
             if self.position + 2 > self.buffer.len() {
                 return Err(DltError::BufferTooSmall);
             }
-            self.buffer[self.position..self.position + 2].copy_from_slice(&0u16.to_be_bytes());
+            self.buffer[self.position..self.position + 2].copy_from_slice(&0u16.to_le_bytes());
             self.position += 2;
         }
 

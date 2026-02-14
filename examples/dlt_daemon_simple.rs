@@ -53,7 +53,7 @@ fn main() -> std::io::Result<()> {
     println!("🚀 DLT Daemon - Simple Example");
     println!("Listening on localhost:3490...\n");
 
-    let listener = TcpListener::bind("127.0.0.1:3490")?;
+    let listener = TcpListener::bind("127.0.0.1:3491")?;
     let state = Arc::new(Mutex::new(DaemonState::new()));
 
     println!("✅ DLT Daemon started successfully!");
