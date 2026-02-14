@@ -185,8 +185,24 @@ fn process_message(
                 let app_id = bytes_to_string(&ext_hdr.apid);
                 let ctx_id = bytes_to_string(&ext_hdr.ctid);
                 
+                // Debug: show raw payload
+                println!("📦 Control message received, payload size: {} bytes", message.payload.len());
+                if message.payload.len() >= 4 {
+                    println!("   Last 4 bytes: {:02x} {:02x} {:02x} {:02x}", 
+                        message.payload[message.payload.len()-4], message.payload[message.payload.len()-3],
+                        message.payload[message.payload.len()-2], message.payload[message.payload.len()-1]);
+                }
+                if message.payload.len() <= 32 {
+                    print!("   Full payload: ");
+                    for b in message.payload {
+                        print!("{:02x} ", b);
+                    }
+                    println!();
+                }
+                
                 // Parse service message
                 let service_parser = DltServiceParser::new(message.payload);
+                println!("   After DltServiceParser::new(), payload size: {} bytes", service_parser.get_payload().len());
                 
                 match service_parser.parse_service_id() {
                     Ok(service_id) => {
@@ -294,12 +310,25 @@ fn handle_service_request(
         }
 
         ServiceId::GetLogInfo => {
-            if let Ok((options, req_app, req_ctx)) = parser.parse_get_log_info_request() {
-                let app_str = bytes_to_string(&req_app);
-                let ctx_str = bytes_to_string(&req_ctx);
-                let with_descriptions = options == 7;
-                println!("  → GetLogInfo: options={}, app={:?}, ctx={:?}", options, app_str, ctx_str);
-                let _ = send_get_log_info_response(stream, buffer, with_descriptions, &req_app, &req_ctx, app_id, ctx_id);
+            println!("  → GetLogInfo request received");
+            match parser.parse_get_log_info_request() {
+                Ok((options, req_app, req_ctx)) => {
+                    let app_str = bytes_to_string(&req_app);
+                    let ctx_str = bytes_to_string(&req_ctx);
+                    let with_descriptions = options == 7;
+                    println!("    Parsed: options={}, app={:?}, ctx={:?}", options, app_str, ctx_str);
+                    match send_get_log_info_response(stream, buffer, with_descriptions, &req_app, &req_ctx, app_id, ctx_id) {
+                        Ok(_) => println!("    ✓ Response sent successfully"),
+                        Err(e) => {
+                            println!("    ✗ Failed to send response: {:?}", e);
+                            let _ = send_service_response(stream, buffer, ServiceId::GetLogInfo, ServiceStatus::Error, app_id, ctx_id);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("    ✗ Failed to parse request: {:?}", e);
+                    let _ = send_service_response(stream, buffer, ServiceId::GetLogInfo, ServiceStatus::Error, app_id, ctx_id);
+                }
             }
         }
 

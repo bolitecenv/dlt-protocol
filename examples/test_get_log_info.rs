@@ -135,6 +135,22 @@ fn read_get_log_info_response(stream: &mut TcpStream, buffer: &mut [u8; 4096]) -
                             
                             match service_parser.parse_service_id() {
                                 Ok(ServiceId::GetLogInfo) => {
+                                    // Debug: print payload info
+                                    let payload = service_parser.get_payload();
+                                    println!("   DEBUG: Payload size = {} bytes", payload.len());
+                                    if payload.len() >= 4 {
+                                        println!("   DEBUG: Last 4 bytes: {:02x} {:02x} {:02x} {:02x}", 
+                                            payload[payload.len()-4], payload[payload.len()-3], 
+                                            payload[payload.len()-2], payload[payload.len()-1]);
+                                    }
+                                    if payload.len() < 20 {
+                                        print!("   DEBUG: Full payload hex: ");
+                                        for b in payload {
+                                            print!("{:02x} ", b);
+                                        }
+                                        println!();
+                                    }
+                                    
                                     match service_parser.parse_get_log_info_response() {
                                         Ok((status, log_info_data)) => {
                                             println!("📋 GetLogInfo Response - Status: {:?}", status);

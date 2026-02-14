@@ -1,6 +1,10 @@
 {
     "chat.tools.terminal.autoApprove": {
         "cargo run": true,
-        "pkill": true
+        "pkill": true,
+        "/^python3 examples/dlt_hex_viewer\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

@@ -52,7 +52,7 @@ Sets the log level for a specific Application ID/Context ID combination.
 | 1 | applicationId | 4×uint8 | Application ID (NULL = all apps) |
 | 2 | contextId | 4×uint8 | Context ID (NULL = all contexts for the app) |
 | 3 | newLogLevel | sint8 | New log level:<br>• DLT_LOG_FATAL to DLT_LOG_VERBOSE<br>• 0 = block all messages<br>• -1 = use default log level |
-| 4 | reserved | 4×uint8 | Reserved (fill with zeros) |
+| 4 | reserved | 4×uint8 | Service message suffix "remo" (0x72 0x65 0x6D 0x6F) |
 
 **Response Parameters:**
 
@@ -73,7 +73,7 @@ Enables or disables trace messages for a given Application ID/Context ID.
 | 1 | applicationId | 4×uint8 | Application ID (NULL = all apps) |
 | 2 | contextId | 4×uint8 | Context ID (NULL = all contexts for the app) |
 | 3 | newTraceStatus | sint8 | 1=On, 0=Off, -1=use default |
-| 4 | reserved | 4 bytes | Reserved (fill with zeros) |
+| 4 | reserved | 4 bytes | Service message suffix "remo" (0x72 0x65 0x6D 0x6F) |
 
 **Response Parameters:**
 
@@ -94,7 +94,7 @@ Requests information about registered Applications and Contexts including IDs, l
 | 1 | options | uint8 | 6 = with log level and trace status<br>7 = with log level, trace status, and descriptions |
 | 2 | applicationId | 4×uint8 | Application ID (NULL = all apps) |
 | 3 | contextId | 4×uint8 | Context ID (NULL = all contexts) |
-| 4 | reserved | 4×uint8 | Reserved (fill with zeros) |
+| 4 | reserved | 4×uint8 | Service message suffix "remo" (0x72 0x65 0x6D 0x6F) |
 
 **Response Parameters:**
 
@@ -102,7 +102,7 @@ Requests information about registered Applications and Contexts including IDs, l
 |---|------|------|-------------|
 | 1 | status | uint8 | 1=NOT_SUPPORTED, 2=ERROR, 6/7=matching request option, 8=NO matching contexts, 9=OVERFLOW |
 | 2 | applicationIds | LogInfoType | Complex structure with app/context info |
-| 3 | reserved | 4×uint8 | Reserved (fill with zeros) |
+| 3 | reserved | 4×uint8 | Service message suffix "remo" (0x72 0x65 0x6D 0x6F) |
 
 **LogInfoType Structure (status 6 or 7):**
 ```
@@ -196,7 +196,7 @@ Sets the default log level for all contexts not explicitly configured.
 | # | Name | Type | Description |
 |---|------|------|-------------|
 | 1 | newLogLevel | sint8 | DLT_LOG_FATAL to DLT_LOG_VERBOSE<br>0 = block all<br>-1 = pass all |
-| 2 | reserved | 4×uint8 | Reserved (fill with zeros) |
+| 2 | reserved | 4×uint8 | Service message suffix "remo" (0x72 0x65 0x6D 0x6F) |
 
 **Response Parameters:**
 
@@ -215,7 +215,7 @@ Enables or disables trace messages for all contexts not explicitly configured.
 | # | Name | Type | Description |
 |---|------|------|-------------|
 | 1 | newTraceStatus | sint8 | 1=On, 0=Off |
-| 2 | reserved | 4 bytes | Reserved (fill with zeros) |
+| 2 | reserved | 4 bytes | Service message suffix "remo" (0x72 0x65 0x6D 0x6F) |
 
 **Response Parameters:**
 

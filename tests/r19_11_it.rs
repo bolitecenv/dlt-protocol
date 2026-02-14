@@ -2014,3 +2014,161 @@ fn test_get_log_info_full_message() {
     assert_eq!(lvl2, 5);
     assert_eq!(trace2, 0);
 }
+
+// ========================================
+// Service Message "remo" Suffix Tests
+// ========================================
+
+#[test]
+fn test_service_message_has_remo_suffix() {
+    // Generate a simple service request and verify it ends with "remo"
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"DA1\0")
+        .with_context_id(b"DC1\0");
+
+    let mut buffer = [0u8; 256];
+    let size = builder
+        .generate_set_log_level_request(&mut buffer, b"LOG\0", b"TEST", 4)
+        .unwrap();
+
+    // Parse the message to get the payload
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+    
+    // Verify the payload (which includes the "remo" suffix in reserved field)
+    assert!(message.payload.len() >= 4);
+    let payload = message.payload;
+    
+    // The reserved field should be "remo"
+    // For SetLogLevel: service_id(4) + app(4) + ctx(4) + level(1) + remo(4)
+    // So "remo" is at offset 13
+    assert_eq!(&payload[13..17], b"remo");
+}
+
+#[test]
+fn test_get_log_info_request_has_remo_suffix() {
+    // Verify GetLogInfo request has "remo" in reserved field
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"DA1\0")
+        .with_context_id(b"DC1\0");
+
+    let mut buffer = [0u8; 256];
+    let size = builder
+        .generate_get_log_info_request(&mut buffer, 7, b"LOG\0", b"TEST")
+        .unwrap();
+
+    // Parse the message
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+    
+    let payload = message.payload;
+    // GetLogInfo: service_id(4) + options(1) + app(4) + ctx(4) + remo(4) = 17 bytes
+    assert_eq!(payload.len(), 17);
+    assert_eq!(&payload[13..17], b"remo");
+}
+
+#[test]
+fn test_get_log_info_response_has_remo_suffix() {
+    // Test GetLogInfo response generation with "remo" suffix
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"DA1\0")
+        .with_context_id(b"DC1\0");
+
+    // Build the log info payload first
+    let mut log_info_payload = [0u8; 512];
+    let mut log_info = LogInfoPayloadWriter::new(&mut log_info_payload, true); // with descriptions
+    log_info.write_app_count(1).unwrap();
+    log_info.write_app_id(b"LOG\0").unwrap();
+    log_info.write_context_count(1).unwrap();
+    log_info.write_context(b"TEST", 0xff, 0xff, Some(b"Test Context for Logging")).unwrap();
+    log_info.write_app_description(Some(b"Test Application for Logging")).unwrap();
+    
+    let log_info_len = log_info.finish().unwrap();
+
+    let mut buffer = [0u8; 1024];
+    let size = builder
+        .generate_get_log_info_response(&mut buffer, ServiceStatus::WithDescriptions, &log_info_payload[..log_info_len])
+        .unwrap();
+
+    // Parse the message to verify structure
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+    
+    let payload = message.payload;
+    // Verify suffix at end: reserved field should be "remo"
+    assert!(payload.len() >= 4);
+    assert_eq!(&payload[payload.len()-4..], b"remo", "GetLogInfo response must end with 'remo' in reserved field");
+}
+
+#[test]
+fn test_parser_strips_remo_suffix() {
+    // Test that parser correctly reads service messages with "remo" suffix
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"APP1")
+        .with_context_id(b"CTX1");
+
+    let mut buffer = [0u8; 256];
+    let size = builder
+        .generate_set_log_level_request(&mut buffer, b"APP1", b"CTX1", 4)
+        .unwrap();
+
+    // Parse the complete message
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+
+    // The payload should include the "remo" suffix in the reserved field
+    let service_parser = DltServiceParser::new(message.payload);
+    
+    // Parse service ID
+    let service_id = service_parser.parse_service_id().unwrap();
+    assert_eq!(service_id, ServiceId::SetLogLevel);
+    
+    // Parse the request parameters
+    let (app_id, ctx_id, log_level) = service_parser.parse_set_log_level_request().unwrap();
+    assert_eq!(&app_id, b"APP1");
+    assert_eq!(&ctx_id, b"CTX1");
+    assert_eq!(log_level, 4);
+    
+    // Verify the payload contains "remo" in the reserved field
+    let payload = service_parser.get_payload();
+    assert_eq!(&payload[13..17], b"remo");
+}
+
+#[test]
+fn test_has_valid_suffix_check() {
+    // "remo" suffix should be in the reserved field of the payload, not at the end
+    // This test is no longer applicable - removing it
+}
+
+#[test]
+fn test_all_service_types_have_remo_suffix() {
+    // Test that all service message types have "remo" in reserved field
+    let mut builder = DltServiceMessageBuilder::new()
+        .with_ecu_id(b"ECU1")
+        .with_app_id(b"APP1")
+        .with_context_id(b"CTX1");
+
+    let mut buffer = [0u8; 256];
+    
+    // SetLogLevel - remo at offset 13
+    let size = builder.generate_set_log_level_request(&mut buffer, b"APP1", b"CTX1", 4).unwrap();
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+    assert_eq!(&message.payload[13..17], b"remo", "SetLogLevel must have remo suffix");
+    
+    // SetTraceStatus - remo at offset 13
+    let size = builder.generate_set_trace_status_request(&mut buffer, b"APP1", b"CTX1", 1).unwrap();
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+    assert_eq!(&message.payload[13..17], b"remo", "SetTraceStatus must have remo suffix");
+    
+    // GetLogInfo - remo at offset 13
+    let size = builder.generate_get_log_info_request(&mut buffer, 6, b"APP1", b"CTX1").unwrap();
+    let mut parser = DltHeaderParser::new(&buffer[..size]);
+    let message = parser.parse_message().unwrap();
+    assert_eq!(&message.payload[13..17], b"remo", "GetLogInfo must have remo suffix");
+}

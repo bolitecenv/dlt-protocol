@@ -264,8 +264,8 @@ impl<'a> DltServiceMessageBuilder<'a> {
         // Log level (signed byte)
         payload[12] = log_level as u8;
         
-        // Reserved (4 bytes of zeros)
-        payload[13..17].copy_from_slice(&[0u8; 4]);
+        // Reserved (4 bytes "remo" suffix)
+        payload[13..17].copy_from_slice(&DLT_SERVICE_SUFFIX);
         
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
@@ -290,7 +290,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         payload[4..8].copy_from_slice(app_id);
         payload[8..12].copy_from_slice(ctx_id);
         payload[12] = trace_status as u8;
-        payload[13..17].copy_from_slice(&[0u8; 4]);
+        payload[13..17].copy_from_slice(&DLT_SERVICE_SUFFIX);
         
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
@@ -315,7 +315,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         payload[4] = options;
         payload[5..9].copy_from_slice(app_id);
         payload[9..13].copy_from_slice(ctx_id);
-        payload[13..17].copy_from_slice(&[0u8; 4]);
+        payload[13..17].copy_from_slice(&DLT_SERVICE_SUFFIX);
         
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
@@ -379,7 +379,7 @@ impl<'a> DltServiceMessageBuilder<'a> {
         
         payload[0..4].copy_from_slice(&ServiceId::SetDefaultLogLevel.to_u32().to_be_bytes());
         payload[4] = log_level as u8;
-        payload[5..9].copy_from_slice(&[0u8; 4]);
+        payload[5..9].copy_from_slice(&DLT_SERVICE_SUFFIX);
         
         self.generate_control_message(buffer, &payload, MtinTypeDltControl::DltControlRequest)
     }
@@ -509,8 +509,8 @@ impl<'a> DltServiceMessageBuilder<'a> {
         temp_payload[0..4].copy_from_slice(&ServiceId::GetLogInfo.to_u32().to_be_bytes());
         temp_payload[4] = status.to_u8();
         temp_payload[5..5 + log_info_payload.len()].copy_from_slice(log_info_payload);
-        // Last 4 bytes are reserved (zeros)
-        temp_payload[5 + log_info_payload.len()..5 + log_info_payload.len() + 4].fill(0);
+        // Last 4 bytes are "remo" suffix
+        temp_payload[5 + log_info_payload.len()..5 + log_info_payload.len() + 4].copy_from_slice(&DLT_SERVICE_SUFFIX);
         
         self.generate_control_message(buffer, &temp_payload[..payload_len], MtinTypeDltControl::DltControlResponse)
     }
@@ -523,13 +523,15 @@ impl<'a> DltServiceMessageBuilder<'a> {
     ///
     /// This wraps the payload in a proper DLT control message with extended header
     /// set to MSTP=Control and the specified MTIN.
+    /// 
+    /// Note: The payload should already include the "remo" suffix in the reserved field.
     fn generate_control_message(
         &mut self,
         buffer: &mut [u8],
         payload: &[u8],
         mtin: MtinTypeDltControl,
     ) -> Result<usize, DltError> {
-        // Calculate required space
+        // Calculate required space  
         let header_size = self.calculate_header_size();
         let serial_size = if self.base_builder.has_serial_header() {
             DLT_SERIAL_HEADER_SIZE

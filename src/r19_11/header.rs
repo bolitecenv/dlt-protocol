@@ -84,6 +84,17 @@ pub const DLT_SERIAL_HEADER_SIZE: usize = 4;
 pub const DLT_SERIAL_HEADER_ARRAY: [u8; DLT_SERIAL_HEADER_SIZE] = [0x44, 0x4C, 0x53, 0x01];
 
 // ========================================
+// Service Message Suffix Constants
+// ========================================
+
+/// Service message suffix size: 4 bytes
+pub const DLT_SERVICE_SUFFIX_SIZE: usize = 4;
+
+/// Service message suffix: "remo" (0x72, 0x65, 0x6D, 0x6F)
+/// All service/control messages must end with this suffix
+pub const DLT_SERVICE_SUFFIX: [u8; DLT_SERVICE_SUFFIX_SIZE] = [0x72, 0x65, 0x6D, 0x6F];
+
+// ========================================
 // MSIN Byte Bit Positions (Extended Header)
 // ========================================
 
