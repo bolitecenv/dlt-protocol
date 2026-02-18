@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,15 +14,32 @@
             background: #1e1e1e;
             color: #d4d4d4;
         }
-        h1 { color: #4ec9b0; }
-        .status { 
+
+        h1 {
+            color: #4ec9b0;
+        }
+
+        .status {
             padding: 10px;
             margin: 10px 0;
             border-radius: 4px;
         }
-        .success { background: #1e3a1e; border-left: 4px solid #4ec9b0; }
-        .error { background: #3a1e1e; border-left: 4px solid #f48771; }
-        .info { background: #1e2a3a; border-left: 4px solid #569cd6; }
+
+        .success {
+            background: #1e3a1e;
+            border-left: 4px solid #4ec9b0;
+        }
+
+        .error {
+            background: #3a1e1e;
+            border-left: 4px solid #f48771;
+        }
+
+        .info {
+            background: #1e2a3a;
+            border-left: 4px solid #569cd6;
+        }
+
         button {
             background: #0e639c;
             color: white;
@@ -32,7 +50,11 @@
             margin: 5px;
             font-size: 14px;
         }
-        button:hover { background: #1177bb; }
+
+        button:hover {
+            background: #1177bb;
+        }
+
         pre {
             background: #2d2d2d;
             padding: 10px;
@@ -40,15 +62,17 @@
             overflow-x: auto;
             border: 1px solid #444;
         }
-        .hex-output { 
+
+        .hex-output {
             color: #ce9178;
             font-size: 12px;
         }
     </style>
 </head>
+
 <body>
     <h1>🦀 DLT Protocol WASM Test</h1>
-    
+
     <div id="status" class="status info">
         Loading WASM module...
     </div>
@@ -56,9 +80,10 @@
     <div id="controls" style="display: none;">
         <h2>🔨 Create Messages</h2>
         <button onclick="testDltMessage()">Create DLT Message</button>
+        <button onclick="testDltMessageWithFileHeader()">Create DLT with File Header</button>
         <button onclick="testVersion()">Check Version</button>
         <button onclick="resetMemory()">Reset Memory</button>
-        
+
         <h2>🔍 Analyze Messages</h2>
         <button onclick="analyzeLastMessage()">Analyze Last Message</button>
     </div>
@@ -74,18 +99,18 @@
         async function loadWasm() {
             try {
                 updateStatus('info', '⏳ Fetching WASM file...');
-                
+
                 // Load the WASM module (cache-busting with timestamp)
                 const cacheBuster = Date.now();
                 const response = await fetch(`../target/wasm32-unknown-unknown/release/examples/wasm_demo.wasm?v=${cacheBuster}`);
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
-                
+
                 updateStatus('info', '⏳ Compiling WASM module...');
                 const buffer = await response.arrayBuffer();
-                
+
                 updateStatus('info', '⏳ Instantiating WASM...');
                 // Instantiate WASM with memory
                 const result = await WebAssembly.instantiate(buffer, {});
@@ -94,7 +119,7 @@
 
                 updateStatus('success', '✅ WASM module loaded successfully!');
                 document.getElementById('controls').style.display = 'block';
-                
+
                 // Auto-run version test
                 testVersion();
             } catch (error) {
@@ -138,14 +163,14 @@
                 wasmModule.reset_allocator();
                 const bufferSize = 256;
                 const bufferPtr = wasmModule.allocate(bufferSize);
-                
+
                 if (bufferPtr === 0) {
                     throw new Error('Failed to allocate memory');
                 }
 
                 // Create DLT message
                 const messageSize = wasmModule.create_dlt_message(bufferPtr, bufferSize);
-                
+
                 if (messageSize === 0) {
                     throw new Error('Failed to create DLT message');
                 }
@@ -157,22 +182,32 @@
                 // Read the message from WASM memory
                 const memory = new Uint8Array(wasmMemory.buffer);
                 const message = memory.slice(bufferPtr, bufferPtr + messageSize);
-                
+
                 // Convert to hex string
                 const hexString = Array.from(message)
                     .map(b => b.toString(16).padStart(2, '0'))
                     .join(' ');
 
-                // Format output with breakdown
-                const serialHeader = hexString.substring(0, 11); // 4 bytes
-                const restOfMessage = hexString.substring(12);
+                // Detect file header and serial header
+                const hasFileHdr = (message[0] === 0x44 && message[1] === 0x4C && message[2] === 0x54 && message[3] === 0x01);
+                let pos = 0;
+                let parts = '';
+                if (hasFileHdr) {
+                    parts += `File Header:   ${Array.from(message.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`;
+                    pos = 4;
+                }
+                const hasSerialHdr = (message[pos] === 0x44 && message[pos + 1] === 0x4C && message[pos + 2] === 0x53 && message[pos + 3] === 0x01);
+                if (hasSerialHdr) {
+                    parts += `Serial Header: ${Array.from(message.slice(pos, pos + 4)).map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`;
+                    pos += 4;
+                }
+                parts += `Rest of Msg:   ${Array.from(message.slice(pos)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`;
 
                 addOutput(`
                     <div class="status success">
                         <strong>DLT Message Created:</strong><br>
                         Size: ${messageSize} bytes<br>
-                        <pre class="hex-output">Serial Header: ${serialHeader}
-Rest of Message: ${restOfMessage}</pre>
+                        <pre class="hex-output">${parts}</pre>
                         <small>ECU: WASM, App: TEST, Context: DEMO, Payload: "Hello from WASM!"</small>
                     </div>
                 `);
@@ -182,6 +217,43 @@ Rest of Message: ${restOfMessage}</pre>
                         <strong>DLT Message Test Failed:</strong> ${error.message}
                     </div>
                 `);
+                console.error(error);
+            }
+        }
+
+        function testDltMessageWithFileHeader() {
+            try {
+                wasmModule.reset_allocator();
+                const bufferSize = 256;
+                const bufferPtr = wasmModule.allocate(bufferSize);
+                if (bufferPtr === 0) throw new Error('Failed to allocate memory');
+
+                const messageSize = wasmModule.create_dlt_message_with_file_header(bufferPtr, bufferSize);
+                if (messageSize <= 0) throw new Error('Failed to create DLT message with file header');
+
+                lastMessagePtr = bufferPtr;
+                lastMessageSize = messageSize;
+
+                const memory = new Uint8Array(wasmMemory.buffer);
+                const message = memory.slice(bufferPtr, bufferPtr + messageSize);
+
+                // File header (4 bytes) + Serial header (4 bytes) + rest
+                const fileHeader = Array.from(message.slice(0, 4)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                const serialHeader = Array.from(message.slice(4, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+                const rest = Array.from(message.slice(8)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+
+                addOutput(`
+                    <div class="status success">
+                        <strong>DLT Message with File Header Created:</strong><br>
+                        Size: ${messageSize} bytes<br>
+                        <pre class="hex-output">File Header:   ${fileHeader}  (DLT\\x01)
+Serial Header: ${serialHeader}  (DLS\\x01)
+Rest of Msg:   ${rest}</pre>
+                        <small>ECU: WASM, App: TEST, Context: DEMO, Payload: "Hello from WASM with file header!"</small>
+                    </div>
+                `);
+            } catch (error) {
+                addOutput(`<div class="status error"><strong>File Header Message Failed:</strong> ${error.message}</div>`);
                 console.error(error);
             }
         }
@@ -209,7 +281,7 @@ Rest of Message: ${restOfMessage}</pre>
 
             try {
                 const resultPtr = wasmModule.analyze_dlt_message(lastMessagePtr, lastMessageSize);
-                
+
                 if (resultPtr === 0) {
                     throw new Error('Analysis returned null pointer');
                 }
@@ -219,7 +291,7 @@ Rest of Message: ${restOfMessage}</pre>
                 const buffer = wasmModule.memory.buffer;
                 const memory = new Uint8Array(buffer);
                 const dataView = new DataView(buffer);
-                
+
                 // Layout: [total_len(u16)][header_len(u16)][payload_len(u16)][payload_offset(u16)]
                 //         [msg_type(u8)][log_level(u8)][has_serial(u8)][has_ecu(u8)]
                 //         [ecu_id(4)][app_id(4)][ctx_id(4)][reserved(8)]
@@ -231,16 +303,20 @@ Rest of Message: ${restOfMessage}</pre>
                 const logLevel = memory[resultPtr + 9];
                 const hasSerial = memory[resultPtr + 10];
                 const hasEcu = memory[resultPtr + 11];
-                
+
+                // Detect file header from original message
+                const origMem = new Uint8Array(wasmMemory.buffer);
+                const hasFileHeader = wasmModule.get_has_file_header(lastMessagePtr, lastMessageSize) === 1;
+
                 const ecuId = bytesToString(memory.slice(resultPtr + 12, resultPtr + 16));
                 const appId = bytesToString(memory.slice(resultPtr + 16, resultPtr + 20));
                 const ctxId = bytesToString(memory.slice(resultPtr + 20, resultPtr + 24));
-                
+
                 // Try to format verbose payload
                 let payloadText = '';
                 if (payloadLen > 0) {
                     const formattedLen = wasmModule.format_verbose_payload(lastMessagePtr, lastMessageSize, payloadOffset, payloadLen);
-                    
+
                     if (formattedLen > 0) {
                         const formattedPtr = wasmModule.get_formatted_payload_ptr();
                         // Get fresh buffer reference after WASM call
@@ -254,7 +330,7 @@ Rest of Message: ${restOfMessage}</pre>
                         payloadText = new TextDecoder().decode(payload);
                     }
                 }
-                
+
                 // Log level names
                 const logLevelNames = ['Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose'];
                 const logLevelName = logLevel <= 5 ? logLevelNames[logLevel] : 'Unknown';
@@ -266,7 +342,8 @@ Rest of Message: ${restOfMessage}</pre>
 Total Length:    ${totalLen} bytes
 Header Length:   ${headerLen} bytes
 Payload Length:  ${payloadLen} bytes
-Serial Header:   ${hasSerial ? 'Yes' : 'No'}
+File Header:     ${hasFileHeader ? 'Yes (DLT\\x01)' : 'No'}
+Serial Header:   ${hasSerial ? 'Yes (DLS\\x01)' : 'No'}
 
 <strong>Identification:</strong>
 ECU ID:          "${ecuId}"
@@ -302,24 +379,24 @@ Message Type:    0x${msgType.toString(16).padStart(2, '0')}
             }
 
             try {
-const ecuId = wasmModule.get_ecu_id(lastMessagePtr, lastMessageSize);
-const appId = wasmModule.get_app_id(lastMessagePtr, lastMessageSize);
-const ctxId = wasmModule.get_context_id(lastMessagePtr, lastMessageSize);
+                const ecuId = wasmModule.get_ecu_id(lastMessagePtr, lastMessageSize);
+                const appId = wasmModule.get_app_id(lastMessagePtr, lastMessageSize);
+                const ctxId = wasmModule.get_context_id(lastMessagePtr, lastMessageSize);
 
-// Get header length from analysis
-const analysisPtr = wasmModule.analyze_dlt_message(lastMessagePtr, lastMessageSize);
-if (analysisPtr === 0) {
-    throw new Error('Failed to analyze message');
-}
+                // Get header length from analysis
+                const analysisPtr = wasmModule.analyze_dlt_message(lastMessagePtr, lastMessageSize);
+                if (analysisPtr === 0) {
+                    throw new Error('Failed to analyze message');
+                }
 
-const dataView = new DataView(wasmMemory.buffer);
-const headerLen = dataView.getUint16(analysisPtr + 2, true);
-const payloadLen = dataView.getUint16(analysisPtr + 4, true);
+                const dataView = new DataView(wasmMemory.buffer);
+                const headerLen = dataView.getUint16(analysisPtr + 2, true);
+                const payloadLen = dataView.getUint16(analysisPtr + 4, true);
 
-// Get payload
-const memory = new Uint8Array(wasmMemory.buffer);
-const message = memory.slice(lastMessagePtr, lastMessagePtr + lastMessageSize);
-                
+                // Get payload
+                const memory = new Uint8Array(wasmMemory.buffer);
+                const message = memory.slice(lastMessagePtr, lastMessagePtr + lastMessageSize);
+
                 let payloadStr = '';
                 if (payloadLen > 0 && headerLen + payloadLen <= lastMessageSize) {
                     const payload = message.slice(headerLen, headerLen + payloadLen);
@@ -361,4 +438,5 @@ Payload:     "${payloadStr}"</pre>
         loadWasm();
     </script>
 </body>
+
 </html>

@@ -5,9 +5,9 @@
 extern crate std;
 
 #[cfg(target_arch = "wasm32")]
-use std::vec::Vec;
-#[cfg(target_arch = "wasm32")]
 use std::string::String;
+#[cfg(target_arch = "wasm32")]
+use std::vec::Vec;
 
 use dlt_protocol::r19_11::*;
 
@@ -29,7 +29,7 @@ pub extern "C" fn create_dlt_message(buffer_ptr: *mut u8, buffer_len: usize) -> 
     }
 
     let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
-    
+
     let mut builder = DltMessageBuilder::new()
         .with_ecu_id(b"WASM")
         .with_app_id(b"TEST")
@@ -37,7 +37,42 @@ pub extern "C" fn create_dlt_message(buffer_ptr: *mut u8, buffer_len: usize) -> 
         .add_serial_header();
 
     let payload = b"Hello from WASM!";
-    
+
+    match builder.generate_log_message_with_payload(
+        buffer,
+        payload,
+        MtinTypeDltLog::DltLogInfo,
+        1,
+        false, // non-verbose mode
+    ) {
+        Ok(size) => size as i32,
+        Err(_) => ERROR_INVALID_FORMAT,
+    }
+}
+
+/// Create a simple DLT log message with a DLT file header ("DLT\x01") at the start
+#[unsafe(no_mangle)]
+pub extern "C" fn create_dlt_message_with_file_header(
+    buffer_ptr: *mut u8,
+    buffer_len: usize,
+) -> i32 {
+    if buffer_ptr.is_null() {
+        return ERROR_NULL_POINTER;
+    }
+    if buffer_len < 104 {
+        return ERROR_BUFFER_TOO_SMALL;
+    }
+
+    let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    let mut builder = DltMessageBuilder::new()
+        .with_ecu_id(b"WASM")
+        .with_app_id(b"TEST")
+        .with_context_id(b"DEMO")
+        .add_file_header()
+        .add_serial_header();
+
+    let payload = b"Hello from WASM with file header!";
+
     match builder.generate_log_message_with_payload(
         buffer,
         payload,
@@ -90,7 +125,7 @@ pub extern "C" fn analyze_dlt_message(buffer_ptr: *const u8, buffer_len: usize) 
     }
 
     let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
-    
+
     // Use r19-11 DltHeaderParser to parse the message
     let mut parser = DltHeaderParser::new(buffer);
     let parsed_msg = match parser.parse_message() {
@@ -99,61 +134,86 @@ pub extern "C" fn analyze_dlt_message(buffer_ptr: *const u8, buffer_len: usize) 
     };
 
     // Extract values from parsed message
-    let has_serial = if parsed_msg.has_serial_header { 1u8 } else { 0u8 };
-    let has_ecu = if parsed_msg.ecu_id.is_some() { 1u8 } else { 0u8 };
+    let has_serial = if parsed_msg.has_serial_header {
+        1u8
+    } else {
+        0u8
+    };
+    let has_ecu = if parsed_msg.ecu_id.is_some() {
+        1u8
+    } else {
+        0u8
+    };
     let ecu_id = parsed_msg.ecu_id.unwrap_or([0u8; 4]);
-    
+
     let total_len = parsed_msg.standard_header.len;
-    
+
     // Calculate header length
     let mut header_len = 4u16; // Standard header
-    if parsed_msg.ecu_id.is_some() { header_len += 4; }
-    if parsed_msg.session_id.is_some() { header_len += 4; }
-    if parsed_msg.timestamp.is_some() { header_len += 4; }
-    if parsed_msg.extended_header.is_some() { header_len += 10; }
-    
+    if parsed_msg.ecu_id.is_some() {
+        header_len += 4;
+    }
+    if parsed_msg.session_id.is_some() {
+        header_len += 4;
+    }
+    if parsed_msg.timestamp.is_some() {
+        header_len += 4;
+    }
+    if parsed_msg.extended_header.is_some() {
+        header_len += 10;
+    }
+
     let payload_len = parsed_msg.payload.len() as u16;
-    
+
     // Calculate payload offset in original buffer
+    let file_offset = if parsed_msg.has_file_header { 4 } else { 0 };
     let serial_offset = if parsed_msg.has_serial_header { 4 } else { 0 };
-    let payload_offset = (serial_offset + header_len) as u16;
+    let payload_offset = (file_offset + serial_offset + header_len) as u16;
 
     // Extract message type information from extended header using r19-11 parsers
-    let (msg_type, mstp, log_level, is_verbose, app_id, ctx_id) = if let Some(ext_hdr) = parsed_msg.extended_header {
-        let msin = ext_hdr.msin;
-        
-        // Use r19-11's MstpType::parse to extract message type from bits 1-3 (per spec)
-        let mstp_raw = (msin >> 1) & 0x07;  // 3 bits at position 1-3
-        let mstp_type = MstpType::parse(mstp_raw);
-        
-        // Use r19-11's Mtin::parse to properly decode MTIN bits from bits 4-7 (per spec)
-        let mtin_raw = (msin >> 4) & 0x0F;  // 4 bits at position 4-7
-        let mtin = Mtin::parse(&mstp_type, mtin_raw);
-        
-        // Extract verbose flag (bit 0)
-        let verbose = msin & 0x01;
-        
-        // Get log level using r19-11's type matching
-        let log_level = match mtin {
-            Mtin::Log(log_type) => {
-                // Convert MtinTypeDltLog to numeric level
-                match log_type {
-                    MtinTypeDltLog::DltLogFatal => 1,
-                    MtinTypeDltLog::DltLogError => 2,
-                    MtinTypeDltLog::DltLogWarn => 3,
-                    MtinTypeDltLog::DltLogInfo => 4,
-                    MtinTypeDltLog::DltLogDebug => 5,
-                    MtinTypeDltLog::DltLogVerbose => 6,
-                    _ => 0,
+    let (msg_type, mstp, log_level, is_verbose, app_id, ctx_id) =
+        if let Some(ext_hdr) = parsed_msg.extended_header {
+            let msin = ext_hdr.msin;
+
+            // Use r19-11's MstpType::parse to extract message type from bits 1-3 (per spec)
+            let mstp_raw = (msin >> 1) & 0x07; // 3 bits at position 1-3
+            let mstp_type = MstpType::parse(mstp_raw);
+
+            // Use r19-11's Mtin::parse to properly decode MTIN bits from bits 4-7 (per spec)
+            let mtin_raw = (msin >> 4) & 0x0F; // 4 bits at position 4-7
+            let mtin = Mtin::parse(&mstp_type, mtin_raw);
+
+            // Extract verbose flag (bit 0)
+            let verbose = msin & 0x01;
+
+            // Get log level using r19-11's type matching
+            let log_level = match mtin {
+                Mtin::Log(log_type) => {
+                    // Convert MtinTypeDltLog to numeric level
+                    match log_type {
+                        MtinTypeDltLog::DltLogFatal => 1,
+                        MtinTypeDltLog::DltLogError => 2,
+                        MtinTypeDltLog::DltLogWarn => 3,
+                        MtinTypeDltLog::DltLogInfo => 4,
+                        MtinTypeDltLog::DltLogDebug => 5,
+                        MtinTypeDltLog::DltLogVerbose => 6,
+                        _ => 0,
+                    }
                 }
-            },
-            _ => 0, // Non-log messages have no log level
+                _ => 0, // Non-log messages have no log level
+            };
+
+            (
+                msin,
+                mstp_type.to_bits(),
+                log_level,
+                verbose,
+                ext_hdr.apid,
+                ext_hdr.ctid,
+            )
+        } else {
+            (0u8, 0u8, 0u8, 0u8, [0u8; 4], [0u8; 4])
         };
-        
-        (msin, mstp_type.to_bits(), log_level, verbose, ext_hdr.apid, ext_hdr.ctid)
-    } else {
-        (0u8, 0u8, 0u8, 0u8, [0u8; 4], [0u8; 4])
-    };
 
     // Allocate result buffer (32 bytes)
     let result_ptr = allocate(32);
@@ -228,17 +288,17 @@ static mut FORMATTED_PAYLOAD: Option<Vec<u8>> = None;
 /// Result is stored in a global Vec that can be accessed via get_formatted_payload_ptr
 #[unsafe(no_mangle)]
 pub extern "C" fn format_verbose_payload(
-    buffer_ptr: *const u8, 
-    buffer_len: usize, 
-    payload_offset: u16, 
+    buffer_ptr: *const u8,
+    buffer_len: usize,
+    payload_offset: u16,
     payload_len: u16,
-    mstp: u8  // Add message type parameter
+    mstp: u8, // Add message type parameter
 ) -> i32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         return ERROR_INVALID_FORMAT;
     }
-    
+
     #[cfg(target_arch = "wasm32")]
     {
         if buffer_ptr.is_null() {
@@ -257,12 +317,12 @@ pub extern "C" fn format_verbose_payload(
 
         let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
         let offset = payload_offset as usize;
-        
+
         let payload = match safe_slice(buffer, offset, payload_len as usize) {
             Some(p) => p,
             None => return ERROR_BUFFER_TOO_SMALL,
         };
-        
+
         // Try to parse verbose payload
         if payload.len() < 4 {
             return ERROR_INVALID_FORMAT;
@@ -273,16 +333,17 @@ pub extern "C" fn format_verbose_payload(
             None => return ERROR_INVALID_FORMAT,
         };
         let type_info = u32::from_le_bytes([
-            type_info_slice[0], 
-            type_info_slice[1], 
-            type_info_slice[2], 
-            type_info_slice[3]
+            type_info_slice[0],
+            type_info_slice[1],
+            type_info_slice[2],
+            type_info_slice[3],
         ]);
         let is_string = (type_info & 0x0200) != 0; // STRG_ASCII flag
-        
+
         if !is_string {
             // Not a string, just return printable characters from raw payload
-            let text: Vec<u8> = payload.iter()
+            let text: Vec<u8> = payload
+                .iter()
                 .filter(|&&b| b >= 32 && b < 127)
                 .copied()
                 .collect();
@@ -295,7 +356,7 @@ pub extern "C" fn format_verbose_payload(
 
         // Parse string argument
         let mut pos = 4; // Skip type info
-        
+
         let str_len_slice = match safe_slice(payload, pos, 2) {
             Some(s) => s,
             None => return ERROR_INVALID_FORMAT,
@@ -311,7 +372,7 @@ pub extern "C" fn format_verbose_payload(
 
         // Check if format string contains "{}"
         let format_string = String::from_utf8_lossy(format_str);
-        
+
         if !format_string.contains("{}") {
             // No placeholders, just return the string
             unsafe {
@@ -334,10 +395,10 @@ pub extern "C" fn format_verbose_payload(
             None => return ERROR_INVALID_FORMAT,
         };
         let arg_type_info = u32::from_le_bytes([
-            arg_type_slice[0], 
-            arg_type_slice[1], 
-            arg_type_slice[2], 
-            arg_type_slice[3]
+            arg_type_slice[0],
+            arg_type_slice[1],
+            arg_type_slice[2],
+            arg_type_slice[3],
         ]);
         pos += 4;
 
@@ -381,9 +442,7 @@ pub extern "C" fn format_verbose_payload(
                 }
             }
             4 => {
-                let val = u32::from_le_bytes([
-                    arg_data[0], arg_data[1], arg_data[2], arg_data[3]
-                ]);
+                let val = u32::from_le_bytes([arg_data[0], arg_data[1], arg_data[2], arg_data[3]]);
                 if is_signed {
                     val as i32 as i64
                 } else {
@@ -392,8 +451,14 @@ pub extern "C" fn format_verbose_payload(
             }
             8 => {
                 let val = u64::from_le_bytes([
-                    arg_data[0], arg_data[1], arg_data[2], arg_data[3],
-                    arg_data[4], arg_data[5], arg_data[6], arg_data[7],
+                    arg_data[0],
+                    arg_data[1],
+                    arg_data[2],
+                    arg_data[3],
+                    arg_data[4],
+                    arg_data[5],
+                    arg_data[6],
+                    arg_data[7],
                 ]);
                 val as i64
             }
@@ -404,11 +469,11 @@ pub extern "C" fn format_verbose_payload(
         let formatted = format_string.replacen("{}", &value.to_string(), 1);
         let formatted_bytes = formatted.as_bytes().to_vec();
         let len = formatted_bytes.len();
-        
+
         unsafe {
             FORMATTED_PAYLOAD = Some(formatted_bytes);
         }
-        
+
         len as i32
     }
 }
@@ -424,7 +489,7 @@ pub extern "C" fn get_formatted_payload_ptr() -> *const u8 {
             .map(|v| v.as_ptr())
             .unwrap_or(core::ptr::null())
     }
-    
+
     #[cfg(not(target_arch = "wasm32"))]
     core::ptr::null()
 }
@@ -444,10 +509,15 @@ pub extern "C" fn get_ecu_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
     }
 
     let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
-    
+
     let mut offset = 0;
-    if buffer.len() >= 4 && &buffer[0..4] == DLT_SERIAL_HEADER_ARRAY {
-        offset = 4;
+    // Detect optional file header first
+    if buffer.len() >= 4 && &buffer[0..4] == DLT_FILE_HEADER_ARRAY {
+        offset += 4;
+    }
+    // Then detect optional serial header
+    if buffer.len() >= offset + 4 && &buffer[offset..offset + 4] == DLT_SERIAL_HEADER_ARRAY {
+        offset += 4;
     }
 
     let htyp_slice = match safe_slice(buffer, offset, 1) {
@@ -455,7 +525,7 @@ pub extern "C" fn get_ecu_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
         None => return 0,
     };
     let htyp = *htyp_slice.get(0).unwrap_or(&0);
-    
+
     if (htyp & WEID_MASK) == 0 {
         return 0; // No ECU ID
     }
@@ -469,7 +539,8 @@ pub extern "C" fn get_ecu_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
         ecu_slice[1],
         ecu_slice[2],
         ecu_slice[3],
-    ])).unwrap_or(0)
+    ]))
+    .unwrap_or(0)
 }
 
 /// Extract App ID from DLT message (from extended header)
@@ -480,10 +551,13 @@ pub extern "C" fn get_app_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
     }
 
     let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
-    
+
     let mut offset = 0;
-    if buffer.len() >= 4 && &buffer[0..4] == DLT_SERIAL_HEADER_ARRAY {
-        offset = 4;
+    if buffer.len() >= 4 && &buffer[0..4] == DLT_FILE_HEADER_ARRAY {
+        offset += 4;
+    }
+    if buffer.len() >= offset + 4 && &buffer[offset..offset + 4] == DLT_SERIAL_HEADER_ARRAY {
+        offset += 4;
     }
 
     let htyp_slice = match safe_slice(buffer, offset, 1) {
@@ -491,15 +565,21 @@ pub extern "C" fn get_app_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
         None => return 0,
     };
     let htyp = *htyp_slice.get(0).unwrap_or(&0);
-    
+
     if (htyp & UEH_MASK) == 0 {
         return 0; // No extended header
     }
 
     let mut ext_offset = offset + 4; // Standard header
-    if (htyp & WEID_MASK) != 0 { ext_offset += 4; }
-    if (htyp & WSID_MASK) != 0 { ext_offset += 4; }
-    if (htyp & WTMS_MASK) != 0 { ext_offset += 4; }
+    if (htyp & WEID_MASK) != 0 {
+        ext_offset += 4;
+    }
+    if (htyp & WSID_MASK) != 0 {
+        ext_offset += 4;
+    }
+    if (htyp & WTMS_MASK) != 0 {
+        ext_offset += 4;
+    }
 
     let app_slice = match safe_slice(buffer, ext_offset + 4, 4) {
         Some(s) => s,
@@ -510,7 +590,8 @@ pub extern "C" fn get_app_id(buffer_ptr: *const u8, buffer_len: usize) -> u32 {
         app_slice[1],
         app_slice[2],
         app_slice[3],
-    ])).unwrap_or(0)
+    ]))
+    .unwrap_or(0)
 }
 
 /// Extract Context ID from DLT message (from extended header)
@@ -521,10 +602,13 @@ pub extern "C" fn get_context_id(buffer_ptr: *const u8, buffer_len: usize) -> u3
     }
 
     let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
-    
+
     let mut offset = 0;
-    if buffer.len() >= 4 && &buffer[0..4] == DLT_SERIAL_HEADER_ARRAY {
-        offset = 4;
+    if buffer.len() >= 4 && &buffer[0..4] == DLT_FILE_HEADER_ARRAY {
+        offset += 4;
+    }
+    if buffer.len() >= offset + 4 && &buffer[offset..offset + 4] == DLT_SERIAL_HEADER_ARRAY {
+        offset += 4;
     }
 
     let htyp_slice = match safe_slice(buffer, offset, 1) {
@@ -532,16 +616,22 @@ pub extern "C" fn get_context_id(buffer_ptr: *const u8, buffer_len: usize) -> u3
         None => return 0,
     };
     let htyp = *htyp_slice.get(0).unwrap_or(&0);
-    
+
     if (htyp & UEH_MASK) == 0 {
         return 0; // No extended header
     }
 
     // Calculate offset to extended header
     let mut ext_offset = offset + 4;
-    if (htyp & WEID_MASK) != 0 { ext_offset += 4; }
-    if (htyp & WSID_MASK) != 0 { ext_offset += 4; }
-    if (htyp & WTMS_MASK) != 0 { ext_offset += 4; }
+    if (htyp & WEID_MASK) != 0 {
+        ext_offset += 4;
+    }
+    if (htyp & WSID_MASK) != 0 {
+        ext_offset += 4;
+    }
+    if (htyp & WTMS_MASK) != 0 {
+        ext_offset += 4;
+    }
 
     let ctx_slice = match safe_slice(buffer, ext_offset + 8, 4) {
         Some(s) => s,
@@ -552,7 +642,22 @@ pub extern "C" fn get_context_id(buffer_ptr: *const u8, buffer_len: usize) -> u3
         ctx_slice[1],
         ctx_slice[2],
         ctx_slice[3],
-    ])).unwrap_or(0)
+    ]))
+    .unwrap_or(0)
+}
+
+/// Return 1 if buffer starts with DLT file header ("DLT\x01"), otherwise 0
+#[unsafe(no_mangle)]
+pub extern "C" fn get_has_file_header(buffer_ptr: *const u8, buffer_len: usize) -> u8 {
+    if buffer_ptr.is_null() || buffer_len < 4 {
+        return 0;
+    }
+    let buffer = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
+    if buffer.len() >= 4 && &buffer[0..4] == DLT_FILE_HEADER_ARRAY {
+        1
+    } else {
+        0
+    }
 }
 
 /// Improved allocator with metadata tracking
@@ -574,23 +679,26 @@ pub extern "C" fn allocate(size: usize) -> *mut u8 {
         let heap_pos_ptr = core::ptr::addr_of_mut!(HEAP_POS);
         let heap_len = (*heap_ptr).len();
         let current_pos = *heap_pos_ptr;
-        
+
         let aligned_size = (size + 7) & !7; // 8-byte alignment
         let total_size = HEADER_SIZE + aligned_size;
-        
+
         if current_pos + total_size > heap_len {
             return core::ptr::null_mut();
         }
-        
+
         let header_ptr = (*heap_ptr).as_mut_ptr().add(current_pos) as *mut AllocHeader;
-        core::ptr::write_unaligned(header_ptr, AllocHeader {
-            size: aligned_size,
-            in_use: 1,
-        });
-        
+        core::ptr::write_unaligned(
+            header_ptr,
+            AllocHeader {
+                size: aligned_size,
+                in_use: 1,
+            },
+        );
+
         let data_ptr = (*heap_ptr).as_mut_ptr().add(current_pos + HEADER_SIZE);
         *heap_pos_ptr = current_pos + total_size;
-        
+
         data_ptr
     }
 }
@@ -601,18 +709,18 @@ pub extern "C" fn deallocate(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    
+
     unsafe {
         let heap_ptr = core::ptr::addr_of!(HEAP);
         let heap_start = (*heap_ptr).as_ptr() as usize;
         let heap_end = heap_start + (*heap_ptr).len();
         let ptr_addr = ptr as usize;
-        
+
         // Validate pointer is within heap
         if ptr_addr < heap_start + HEADER_SIZE || ptr_addr >= heap_end {
             return;
         }
-        
+
         let header_ptr = ptr.sub(HEADER_SIZE) as *mut AllocHeader;
         let mut header = core::ptr::read_unaligned(header_ptr);
         header.in_use = 0;
@@ -663,7 +771,7 @@ pub extern "C" fn get_heap_capacity() -> usize {
 ///   [12]     log_level (1=Fatal..6=Verbose)
 ///   [13]     verbose   (0 or 1)
 ///   [14]     noar      (number of arguments, usually 1)
-///   [15]     reserved
+///   [15]     file_header (0=no, 1=prepend DLT file header "DLT\x01")
 ///   [16..20] timestamp (u32 LE)
 ///   [20..24] reserved
 ///
@@ -696,6 +804,7 @@ pub extern "C" fn generate_log_message(
     let log_level_raw = config[12];
     let verbose = config[13] != 0;
     let noar = config[14];
+    let file_header = config[15] != 0;
     let timestamp = u32::from_le_bytes([config[16], config[17], config[18], config[19]]);
 
     let log_level = match log_level_raw {
@@ -714,13 +823,11 @@ pub extern "C" fn generate_log_message(
         .with_context_id(ctx_id)
         .with_timestamp(timestamp);
 
-    match builder.generate_log_message_with_payload(
-        buffer,
-        payload,
-        log_level,
-        noar,
-        verbose,
-    ) {
+    if file_header {
+        builder = builder.add_file_header();
+    }
+
+    match builder.generate_log_message_with_payload(buffer, payload, log_level, noar, verbose) {
         Ok(size) => size as i32,
         Err(_) => ERROR_INVALID_FORMAT,
     }
@@ -795,7 +902,11 @@ pub extern "C" fn generate_set_log_level_request(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> i32 {
-    if config_ptr.is_null() || target_app_ptr.is_null() || target_ctx_ptr.is_null() || out_ptr.is_null() {
+    if config_ptr.is_null()
+        || target_app_ptr.is_null()
+        || target_ctx_ptr.is_null()
+        || out_ptr.is_null()
+    {
         return ERROR_NULL_POINTER;
     }
 
@@ -837,7 +948,11 @@ pub extern "C" fn generate_get_log_info_request(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> i32 {
-    if config_ptr.is_null() || target_app_ptr.is_null() || target_ctx_ptr.is_null() || out_ptr.is_null() {
+    if config_ptr.is_null()
+        || target_app_ptr.is_null()
+        || target_ctx_ptr.is_null()
+        || out_ptr.is_null()
+    {
         return ERROR_NULL_POINTER;
     }
 
@@ -1111,11 +1226,21 @@ pub extern "C" fn parse_service_message(
 
     // Calculate payload offset in the original buffer
     let mut hdr_size: u16 = 4; // standard header
-    if message.has_serial_header { hdr_size += 4; } // serial header is before standard header but offsets from buffer start
-    if message.ecu_id.is_some() { hdr_size += 4; }
-    if message.session_id.is_some() { hdr_size += 4; }
-    if message.timestamp.is_some() { hdr_size += 4; }
-    if message.extended_header.is_some() { hdr_size += 10; }
+    if message.has_serial_header {
+        hdr_size += 4;
+    } // serial header is before standard header but offsets from buffer start
+    if message.ecu_id.is_some() {
+        hdr_size += 4;
+    }
+    if message.session_id.is_some() {
+        hdr_size += 4;
+    }
+    if message.timestamp.is_some() {
+        hdr_size += 4;
+    }
+    if message.extended_header.is_some() {
+        hdr_size += 10;
+    }
     let serial_offset: u16 = if message.has_serial_header { 4 } else { 0 };
     let payload_offset = serial_offset + hdr_size;
     result[22] = (payload_offset & 0xFF) as u8;

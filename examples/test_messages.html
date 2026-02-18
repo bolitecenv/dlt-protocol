@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <title>DLT WASM Test - Message Type Parsing</title>
@@ -12,21 +13,25 @@
             background: #1e1e1e;
             color: #d4d4d4;
         }
+
         h1 {
             color: #4ec9b0;
             border-bottom: 2px solid #4ec9b0;
             padding-bottom: 10px;
         }
+
         .container {
             display: grid;
             gap: 20px;
         }
+
         .input-section {
             background: #252526;
             padding: 15px;
             border-radius: 5px;
             border: 1px solid #3e3e42;
         }
+
         textarea {
             width: 100%;
             height: 150px;
@@ -38,6 +43,7 @@
             font-size: 12px;
             resize: vertical;
         }
+
         button {
             background: #0e639c;
             color: white;
@@ -48,9 +54,11 @@
             font-size: 14px;
             margin-top: 10px;
         }
+
         button:hover {
             background: #1177bb;
         }
+
         .output-section {
             background: #252526;
             padding: 15px;
@@ -59,6 +67,7 @@
             max-height: 600px;
             overflow-y: auto;
         }
+
         .message {
             background: #2d2d30;
             margin: 10px 0;
@@ -66,17 +75,33 @@
             border-left: 4px solid #007acc;
             border-radius: 3px;
         }
-        .message.log { border-left-color: #4ec9b0; }
-        .message.control { border-left-color: #ce9178; }
-        .message.network { border-left-color: #c586c0; }
-        .message.trace { border-left-color: #dcdcaa; }
-        .message.error { border-left-color: #f48771; }
-        
+
+        .message.log {
+            border-left-color: #4ec9b0;
+        }
+
+        .message.control {
+            border-left-color: #ce9178;
+        }
+
+        .message.network {
+            border-left-color: #c586c0;
+        }
+
+        .message.trace {
+            border-left-color: #dcdcaa;
+        }
+
+        .message.error {
+            border-left-color: #f48771;
+        }
+
         .msg-header {
             font-weight: bold;
             margin-bottom: 10px;
             font-size: 14px;
         }
+
         .msg-type {
             display: inline-block;
             padding: 2px 8px;
@@ -85,24 +110,43 @@
             margin-right: 10px;
             font-weight: bold;
         }
-        .msg-type.log { background: #4ec9b0; color: #000; }
-        .msg-type.control { background: #ce9178; color: #000; }
-        .msg-type.network { background: #c586c0; color: #000; }
-        .msg-type.trace { background: #dcdcaa; color: #000; }
-        
+
+        .msg-type.log {
+            background: #4ec9b0;
+            color: #000;
+        }
+
+        .msg-type.control {
+            background: #ce9178;
+            color: #000;
+        }
+
+        .msg-type.network {
+            background: #c586c0;
+            color: #000;
+        }
+
+        .msg-type.trace {
+            background: #dcdcaa;
+            color: #000;
+        }
+
         .field {
             margin: 5px 0;
             display: flex;
             gap: 10px;
         }
+
         .field-name {
             color: #9cdcfe;
             min-width: 120px;
         }
+
         .field-value {
             color: #ce9178;
             font-weight: bold;
         }
+
         .hex-data {
             color: #608b4e;
             font-size: 11px;
@@ -112,6 +156,7 @@
             background: #1e1e1e;
             border-radius: 3px;
         }
+
         .payload {
             margin-top: 10px;
             padding: 10px;
@@ -119,6 +164,7 @@
             border-radius: 3px;
             border: 1px solid #3e3e42;
         }
+
         .stats {
             background: #0e639c;
             color: white;
@@ -129,23 +175,27 @@
             gap: 20px;
             flex-wrap: wrap;
         }
+
         .stat-item {
             display: flex;
             flex-direction: column;
         }
+
         .stat-label {
             font-size: 11px;
             opacity: 0.8;
         }
+
         .stat-value {
             font-size: 18px;
             font-weight: bold;
         }
     </style>
 </head>
+
 <body>
     <h1>🦀 DLT Protocol WASM Test - Message Type Parsing</h1>
-    
+
     <div class="container">
         <div class="input-section">
             <h2>Test Messages (Hex)</h2>
@@ -156,7 +206,7 @@
             <button onclick="parseMessages()">Parse Messages</button>
             <button onclick="clearOutput()">Clear Output</button>
         </div>
-        
+
         <div class="output-section">
             <div id="stats"></div>
             <div id="output"></div>
@@ -177,7 +227,7 @@
                 console.log('✅ WASM module loaded successfully');
             } catch (error) {
                 console.error('❌ Failed to load WASM:', error);
-                document.getElementById('output').innerHTML = 
+                document.getElementById('output').innerHTML =
                     '<div class="message error">Failed to load WASM module: ' + error.message + '</div>';
             }
         }
@@ -202,6 +252,83 @@
                 .join('');
         }
 
+        // Best-effort parser for truncated messages: extract whatever header fields are available
+        function bestEffortParse(hexLine, msgBytes, hasFileHeader) {
+            const bytes = msgBytes;
+            let offset = 0;
+            let html = `<div class="message error"><div class="msg-header">Partial Parse</div>`;
+            html += `<div class="field"><span class="field-name">File Header:</span><span class="field-value">${hasFileHeader ? 'Present' : 'Absent'}</span></div>`;
+            if (hasFileHeader) offset += 4;
+
+            if (bytes.length - offset >= 4) {
+                const htyp = bytes[offset];
+                const mcnt = bytes[offset + 1];
+                const len = (bytes[offset + 2] << 8) | bytes[offset + 3];
+                const UEH = (htyp & 0x01) !== 0;
+                const WEID = (htyp & 0x04) !== 0;
+                const WSID = (htyp & 0x08) !== 0;
+                const WTMS = (htyp & 0x10) !== 0;
+
+                html += `<div class="field"><span class="field-name">HTYP:</span><span class="field-value">0x${htyp.toString(16)}</span></div>`;
+                html += `<div class="field"><span class="field-name">MCNT:</span><span class="field-value">${mcnt}</span></div>`;
+                html += `<div class="field"><span class="field-name">LEN:</span><span class="field-value">${len}</span></div>`;
+                html += `<div class="field"><span class="field-name">Flags:</span><span class="field-value">UEH=${UEH} WEID=${WEID} WSID=${WSID} WTMS=${WTMS}</span></div>`;
+
+                offset += 4;
+
+                if (WEID) {
+                    if (bytes.length - offset >= 4) {
+                        const ecu = bytes.slice(offset, offset + 4);
+                        html += `<div class="field"><span class="field-name">ECU ID:</span><span class="field-value">${bytesToString(ecu)}</span></div>`;
+                        offset += 4;
+                    } else {
+                        html += `<div class="field"><span class="field-name">ECU ID:</span><span class="field-value">truncated</span></div>`;
+                    }
+                }
+
+                if (WSID) {
+                    if (bytes.length - offset >= 4) {
+                        const seid = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | (bytes[offset + 3]);
+                        html += `<div class="field"><span class="field-name">Session ID:</span><span class="field-value">${seid}</span></div>`;
+                        offset += 4;
+                    } else {
+                        html += `<div class="field"><span class="field-name">Session ID:</span><span class="field-value">truncated</span></div>`;
+                    }
+                }
+
+                if (WTMS) {
+                    if (bytes.length - offset >= 4) {
+                        const tmsp = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | (bytes[offset + 3]);
+                        html += `<div class="field"><span class="field-name">Timestamp:</span><span class="field-value">${tmsp}</span></div>`;
+                        offset += 4;
+                    } else {
+                        html += `<div class="field"><span class="field-name">Timestamp:</span><span class="field-value">truncated</span></div>`;
+                    }
+                }
+
+                if (UEH) {
+                    if (bytes.length - offset >= 2) {
+                        const msin = bytes[offset];
+                        const noar = bytes[offset + 1] || 0;
+                        const apid = (bytes.length - offset >= 6) ? bytes.slice(offset + 2, offset + 6) : null;
+                        const ctid = (bytes.length - offset >= 10) ? bytes.slice(offset + 6, offset + 10) : null;
+                        html += `<div class="field"><span class="field-name">Extended MSIN:</span><span class="field-value">0x${msin.toString(16)}</span></div>`;
+                        html += `<div class="field"><span class="field-name">NOAR:</span><span class="field-value">${noar}</span></div>`;
+                        if (apid) html += `<div class="field"><span class="field-name">App ID:</span><span class="field-value">${bytesToString(apid)}</span></div>`; else html += `<div class="field"><span class="field-name">App ID:</span><span class="field-value">truncated</span></div>`;
+                        if (ctid) html += `<div class="field"><span class="field-name">Context ID:</span><span class="field-value">${bytesToString(ctid)}</span></div>`; else html += `<div class="field"><span class="field-name">Context ID:</span><span class="field-value">truncated</span></div>`;
+                    } else {
+                        html += `<div class="field"><span class="field-name">Extended Header:</span><span class="field-value">truncated</span></div>`;
+                    }
+                }
+            } else {
+                html += `<div class="field"><span class="field-name">Standard Header:</span><span class="field-value">truncated</span></div>`;
+            }
+
+            html += `<div class="hex-data">Raw: ${hexLine.trim()}</div>`;
+            html += `</div>`;
+            return html;
+        }
+
         function getMessageTypeName(mstp) {
             const types = ['Log', 'Trace', 'Network', 'Control'];
             return types[mstp] || 'Unknown';
@@ -214,14 +341,14 @@
 
         function parseMessages() {
             if (!wasmModule) {
-                document.getElementById('output').innerHTML = 
+                document.getElementById('output').innerHTML =
                     '<div class="message error">WASM not loaded yet. Please wait...</div>';
                 return;
             }
 
             const input = document.getElementById('hexInput').value;
             const hexLines = input.split('\n').filter(line => line.trim().length > 0);
-            
+
             let output = '';
             let stats = {
                 total: 0,
@@ -236,7 +363,7 @@
                 stats.total++;
                 try {
                     const msgBytes = hexToBytes(hexLine.trim());
-                    
+
                     // Write message to WASM memory
                     const bufferPtr = wasmModule.allocate(msgBytes.length);
                     if (bufferPtr === 0) {
@@ -247,14 +374,16 @@
                     buffer.set(msgBytes);
 
                     // Analyze the message
+                    // Check for DLT file header (DLT\x01)
+                    const hasFileHeader = wasmModule.get_has_file_header(bufferPtr, msgBytes.length) === 1;
+
                     const resultPtr = wasmModule.analyze_dlt_message(bufferPtr, msgBytes.length);
-                    
+
                     if (resultPtr === 0) {
                         stats.errors++;
-                        output += `<div class="message error">
-                            <div class="msg-header">Message #${index + 1} - Parse Error</div>
-                            <div class="hex-data">${hexLine.trim()}</div>
-                        </div>`;
+                        // Best-effort parse and show partial fields
+                        const partialHtml = bestEffortParse(hexLine, msgBytes, hasFileHeader);
+                        output += partialHtml;
                         wasmModule.deallocate(bufferPtr);
                         return;
                     }
@@ -277,7 +406,7 @@
 
                     const msgTypeName = getMessageTypeName(mstp);
                     const msgTypeClass = msgTypeName.toLowerCase();
-                    
+
                     // Update stats
                     if (mstp === 0) stats.log++;
                     else if (mstp === 1) stats.trace++;
@@ -291,28 +420,30 @@
                         </div>`;
 
                     output += `<div class="field"><span class="field-name">MSTP:</span><span class="field-value">${mstp} (${msgTypeName})</span></div>`;
-                    
+
                     if (mstp === 0) {
                         output += `<div class="field"><span class="field-name">Log Level:</span><span class="field-value">${logLevel} (${getLogLevelName(logLevel)})</span></div>`;
                     }
-                    
+
                     output += `<div class="field"><span class="field-name">Verbose:</span><span class="field-value">${isVerbose ? 'Yes' : 'No'}</span></div>`;
                     output += `<div class="field"><span class="field-name">Total Length:</span><span class="field-value">${totalLen} bytes</span></div>`;
                     output += `<div class="field"><span class="field-name">Header Length:</span><span class="field-value">${headerLen} bytes</span></div>`;
                     output += `<div class="field"><span class="field-name">Payload Length:</span><span class="field-value">${payloadLen} bytes</span></div>`;
-                    
+
                     if (hasSerial) {
                         output += `<div class="field"><span class="field-name">Serial Header:</span><span class="field-value">Present</span></div>`;
                     }
-                    
+                    // File header info
+                    output += `<div class="field"><span class="field-name">File Header:</span><span class="field-value">${hasFileHeader ? 'Present' : 'Absent'}</span></div>`;
+
                     if (hasEcu && ecuId) {
                         output += `<div class="field"><span class="field-name">ECU ID:</span><span class="field-value">${ecuId}</span></div>`;
                     }
-                    
+
                     if (appId) {
                         output += `<div class="field"><span class="field-name">App ID:</span><span class="field-value">${appId}</span></div>`;
                     }
-                    
+
                     if (ctxId) {
                         output += `<div class="field"><span class="field-name">Context ID:</span><span class="field-value">${ctxId}</span></div>`;
                     }
@@ -323,7 +454,7 @@
                         output += `<div class="payload">`;
                         output += `<strong>Payload (${payloadLen} bytes):</strong><br>`;
                         output += `<div class="hex-data">Hex: ${bytesToHex(payloadBytes)}</div>`;
-                        
+
                         if (mstp === 0 && isVerbose) {
                             output += `<div style="margin-top: 8px; color: #4ec9b0;">📝 Log message verbose payload - ready for parsing</div>`;
                         } else if (mstp === 3) {
@@ -331,7 +462,7 @@
                         } else if (mstp === 2) {
                             output += `<div style="margin-top: 8px; color: #c586c0;">🌐 Network message - payload not parsed</div>`;
                         }
-                        
+
                         output += `</div>`;
                     }
 
@@ -397,4 +528,5 @@
         loadWasm();
     </script>
 </body>
+
 </html>

@@ -1,6 +1,6 @@
 //! # DLT Protocol R19.11 Header Definitions
 //!
-//! This module implements the AUTOSAR DLT (Diagnostic Log and Trace) protocol 
+//! This module implements the AUTOSAR DLT (Diagnostic Log and Trace) protocol
 //! header structures and parsing logic according to specification release 19.11.
 //!
 //! ## DLT Message Structure
@@ -82,6 +82,12 @@ pub const DLT_SERIAL_HEADER_SIZE: usize = 4;
 
 /// Serial header pattern: "DLS" + 0x01
 pub const DLT_SERIAL_HEADER_ARRAY: [u8; DLT_SERIAL_HEADER_SIZE] = [0x44, 0x4C, 0x53, 0x01];
+
+/// File header size: 4 bytes
+pub const DLT_FILE_HEADER_SIZE: usize = 4;
+
+/// File header pattern: "DLT" + 0x01
+pub const DLT_FILE_HEADER_ARRAY: [u8; DLT_FILE_HEADER_SIZE] = [0x44, 0x4C, 0x54, 0x01];
 
 // ========================================
 // Service Message Suffix Constants
@@ -376,6 +382,8 @@ pub enum DltHeaderError {
 pub struct DltMessage<'a> {
     /// Whether the message included a serial header
     pub has_serial_header: bool,
+    /// Whether the data started with a DLT file header
+    pub has_file_header: bool,
     /// Standard header (always present)
     pub standard_header: DltStandardHeader,
     /// Decoded header type flags
@@ -404,7 +412,7 @@ pub struct DltMessage<'a> {
 ///
 /// let data: &[u8] = &[/* DLT packet bytes */];
 /// let mut parser = DltHeaderParser::new(data);
-/// 
+///
 /// match parser.parse_message() {
 ///     Ok(message) => {
 ///         println!("ECU: {:?}", message.ecu_id);
@@ -441,8 +449,14 @@ impl<'a> DltHeaderParser<'a> {
     /// - `Err(DltHeaderError)`: Parsing failed (buffer too small, invalid version, etc.)
     pub fn parse_message(&mut self) -> Result<DltMessage<'a>, DltHeaderError> {
         let start_position = self.position;
-        
-        // Check for optional serial header
+
+        // Check for optional file header ("DLT\x01") and serial header ("DLS\x01").
+        // File header is used at the start of DLT files; serial header is used for streams.
+        let has_file = self.check_file_header();
+        if has_file {
+            self.skip_file_header()?;
+        }
+
         let has_serial = self.check_serial_header();
         if has_serial {
             self.skip_serial_header()?;
@@ -466,28 +480,33 @@ impl<'a> DltHeaderParser<'a> {
         // The 'len' field in standard header includes everything from standard header to end of payload
         // It does NOT include the serial header
         let total_len = standard_header.len as usize;
-        
-        // Calculate how many header bytes we've consumed (excluding serial header)
-        let header_bytes_consumed = if has_serial {
-            self.position - start_position - DLT_SERIAL_HEADER_SIZE
-        } else {
-            self.position - start_position
-        };
-        
+
+        // Calculate how many header bytes we've consumed (excluding serial/file headers)
+        // If file header was present we subtract its size as it is not included in the
+        // standard header 'len' field. Similarly for serial header.
+        let mut header_bytes_consumed = self.position - start_position;
+        if has_file {
+            header_bytes_consumed = header_bytes_consumed.saturating_sub(DLT_FILE_HEADER_SIZE);
+        }
+        if has_serial {
+            header_bytes_consumed = header_bytes_consumed.saturating_sub(DLT_SERIAL_HEADER_SIZE);
+        }
+
         // Payload length = total_len - header_bytes_consumed
         let payload_len = total_len.saturating_sub(header_bytes_consumed);
         let payload_start = self.position;
         let payload_end = payload_start + payload_len;
-        
+
         if payload_end > self.data.len() {
             return Err(DltHeaderError::BufferTooSmall);
         }
-        
+
         let payload = &self.data[payload_start..payload_end];
         self.position = payload_end;
-        
+
         Ok(DltMessage {
             has_serial_header: has_serial,
+            has_file_header: has_file,
             standard_header,
             header_type,
             ecu_id,
@@ -503,7 +522,8 @@ impl<'a> DltHeaderParser<'a> {
         if self.position + DLT_SERIAL_HEADER_SIZE > self.data.len() {
             return false;
         }
-        &self.data[self.position..self.position + DLT_SERIAL_HEADER_SIZE] == &DLT_SERIAL_HEADER_ARRAY
+        &self.data[self.position..self.position + DLT_SERIAL_HEADER_SIZE]
+            == &DLT_SERIAL_HEADER_ARRAY
     }
 
     /// Skip the serial header
@@ -515,6 +535,23 @@ impl<'a> DltHeaderParser<'a> {
         Ok(())
     }
 
+    /// Check if the buffer starts with a DLT file header
+    fn check_file_header(&self) -> bool {
+        if self.position + DLT_FILE_HEADER_SIZE > self.data.len() {
+            return false;
+        }
+        &self.data[self.position..self.position + DLT_FILE_HEADER_SIZE] == &DLT_FILE_HEADER_ARRAY
+    }
+
+    /// Skip the DLT file header
+    fn skip_file_header(&mut self) -> Result<(), DltHeaderError> {
+        if self.position + DLT_FILE_HEADER_SIZE > self.data.len() {
+            return Err(DltHeaderError::BufferTooSmall);
+        }
+        self.position += DLT_FILE_HEADER_SIZE;
+        Ok(())
+    }
+
     /// Parse the standard header (4 bytes)
     fn parse_standard_header(&mut self) -> Result<DltStandardHeader, DltHeaderError> {
         if self.position + DLT_STANDARD_HEADER_SIZE > self.data.len() {
@@ -523,7 +560,7 @@ impl<'a> DltHeaderParser<'a> {
 
         let htyp = self.data[self.position];
         let mcnt = self.data[self.position + 1];
-        
+
         // Check version
         let version = (htyp & VERS_MASK) >> 5;
         if version != 1 {
@@ -729,4 +766,3 @@ impl DltExtendedHeader {
         }
     }
 }
-

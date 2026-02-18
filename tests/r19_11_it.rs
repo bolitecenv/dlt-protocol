@@ -744,6 +744,39 @@ fn test_payload_roundtrip() {
     assert!(parser.is_empty());
 }
 
+#[test]
+fn test_file_header_generate_and_parse() {
+    let mut builder = DltMessageBuilder::new()
+        .add_file_header()
+        .with_ecu_id(b"FILE")
+        .with_app_id(b"TAPP")
+        .with_context_id(b"TCTX");
+
+    let mut buffer = [0u8; 256];
+    let payload = b"FileHeaderTest";
+
+    let total = builder
+        .generate_log_message_with_payload(
+            &mut buffer,
+            payload,
+            MtinTypeDltLog::DltLogInfo,
+            0,
+            false,
+        )
+        .expect("generate message");
+
+    // Verify file header bytes present at start
+    assert_eq!(&buffer[0..DLT_FILE_HEADER_SIZE], &DLT_FILE_HEADER_ARRAY);
+
+    // Parse the generated message and verify parser detects file header
+    let mut parser = DltHeaderParser::new(&buffer[..total]);
+    let msg = parser.parse_message().expect("parse message");
+
+    assert!(msg.has_file_header);
+    assert!(!msg.has_serial_header);
+    assert_eq!(msg.payload, payload);
+}
+
 // ========================================
 // DltValue and Automatic Parsing Tests
 // ========================================

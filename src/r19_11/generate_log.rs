@@ -55,7 +55,7 @@ pub enum DltEndian {
 }
 
 // ========================================
-// Common Builder Configuration (Legacy) 
+// Common Builder Configuration (Legacy)
 // ========================================
 
 /// Common settings for DLT message generation
@@ -109,6 +109,8 @@ pub struct DltMessageBuilder<'a> {
     message_counter: u8,
     /// Whether to include serial header ("DLS\x01")
     serial_header: bool,
+    /// Whether to include DLT file header ("DLT\x01") at the start
+    file_header: bool,
     /// ECU ID (4 bytes)
     ecu_id: &'a [u8; DLT_ID_SIZE],
     /// Session ID value
@@ -164,6 +166,7 @@ impl<'a> DltMessageBuilder<'a> {
             get_tmsp: None,
             get_sess_id: None,
             serial_header: false,
+            file_header: false,
             timestamp_provider: GLOBAL_TIMESTAMP.get(),
             session_id_provider: GLOBAL_SESSION.get(),
         }
@@ -218,6 +221,12 @@ impl<'a> DltMessageBuilder<'a> {
     /// Enable serial header ("DLS\x01") at the beginning of messages
     pub fn add_serial_header(mut self) -> Self {
         self.serial_header = true;
+        self
+    }
+
+    /// Enable DLT file header ("DLT\x01") at the beginning of messages/files
+    pub fn add_file_header(mut self) -> Self {
+        self.file_header = true;
         self
     }
 
@@ -311,6 +320,12 @@ impl<'a> DltMessageBuilder<'a> {
         self.serial_header
     }
 
+    /// Check if file header flag is enabled
+    #[doc(hidden)]
+    pub fn has_file_header(&self) -> bool {
+        self.file_header
+    }
+
     /// Get the ECU ID (internal use)
     #[doc(hidden)]
     pub fn get_ecu_id(&self) -> &[u8; DLT_ID_SIZE] {
@@ -349,11 +364,26 @@ impl<'a> DltMessageBuilder<'a> {
     ///
     /// # Note
     /// The existing payload will be moved backward in the buffer to make room for headers.
-    pub fn insert_header_at_front(&mut self, buffer: &mut [u8], payload_size: usize, arg_num: u8, log_level: MtinTypeDltLog) -> Result<usize, DltError> {
+    pub fn insert_header_at_front(
+        &mut self,
+        buffer: &mut [u8],
+        payload_size: usize,
+        arg_num: u8,
+        log_level: MtinTypeDltLog,
+    ) -> Result<usize, DltError> {
         let header_size = self._generate_log_message_header_size();
-        let serial_size = if self.serial_header { DLT_SERIAL_HEADER_SIZE } else { 0 };
-        let total_header_size = serial_size + header_size;
-        
+        let file_size = if self.file_header {
+            DLT_FILE_HEADER_SIZE
+        } else {
+            0
+        };
+        let serial_size = if self.serial_header {
+            DLT_SERIAL_HEADER_SIZE
+        } else {
+            0
+        };
+        let total_header_size = file_size + serial_size + header_size;
+
         if buffer.len() < total_header_size {
             return Err(DltError::BufferTooSmall);
         }
@@ -370,7 +400,7 @@ impl<'a> DltMessageBuilder<'a> {
 
         // Insert header at the front of the buffer
         self._generate_log_message(buffer, payload_size, log_level, arg_num, false)?;
-        
+
         Ok(total_size)
     }
 
@@ -412,20 +442,30 @@ impl<'a> DltMessageBuilder<'a> {
         verbose: bool,
     ) -> Result<usize, DltError> {
         let header_size = self._generate_log_message_header_size();
-        let serial_size = if self.serial_header { DLT_SERIAL_HEADER_SIZE } else { 0 };
-        let payload_offset = serial_size + header_size;
+        let file_size = if self.file_header {
+            DLT_FILE_HEADER_SIZE
+        } else {
+            0
+        };
+        let serial_size = if self.serial_header {
+            DLT_SERIAL_HEADER_SIZE
+        } else {
+            0
+        };
+        let payload_offset = file_size + serial_size + header_size;
 
         // Build payload using PayloadBuilder in verbose mode, or copy raw bytes in non-verbose mode
         let payload_size = if verbose {
             // Use PayloadBuilder to encode the payload with type information
             let mut payload_builder = PayloadBuilder::new(&mut buffer[payload_offset..]);
-            
+
             // Convert payload bytes to string and add with type info
-            let payload_str = core::str::from_utf8(payload)
-                .map_err(|_| DltError::InvalidParameter)?;
-            payload_builder.add_string(payload_str)
+            let payload_str =
+                core::str::from_utf8(payload).map_err(|_| DltError::InvalidParameter)?;
+            payload_builder
+                .add_string(payload_str)
                 .map_err(|_| DltError::BufferTooSmall)?;
-            
+
             payload_builder.len()
         } else {
             // Non-verbose: copy raw payload bytes
@@ -436,18 +476,24 @@ impl<'a> DltMessageBuilder<'a> {
             payload.len()
         };
 
-        let total_size = serial_size + header_size + payload_size;
-        
+        let total_size = file_size + serial_size + header_size + payload_size;
+
         if buffer.len() < total_size {
             return Err(DltError::BufferTooSmall);
         }
 
         // Generate headers (this will write into buffer[0..payload_offset])
-        let _header_bytes_written = self._generate_log_message(buffer, payload_size, log_level, number_of_arguments, verbose)?;
+        let _header_bytes_written = self._generate_log_message(
+            buffer,
+            payload_size,
+            log_level,
+            number_of_arguments,
+            verbose,
+        )?;
 
         Ok(total_size)
     }
-    
+
     // ========================================
     // Message Generation - Internal Implementation
     // ========================================
@@ -472,11 +518,11 @@ impl<'a> DltMessageBuilder<'a> {
         verbose: bool,
     ) -> Result<usize, DltError> {
         let mut offset = 0;
-        
+
         // Calculate message length (per DLT spec: excludes serial header)
         let header_size = self._generate_log_message_header_size();
         let len_field = (header_size + payload_size) as u16;
-        
+
         let total_len = if self.serial_header {
             DLT_SERIAL_HEADER_SIZE + header_size + payload_size
         } else {
@@ -488,8 +534,13 @@ impl<'a> DltMessageBuilder<'a> {
         }
 
         // ----------------------------------------
-        // 1. Write Serial Header (optional)
+        // 1. Write File Header (optional) then Serial Header (optional)
         // ----------------------------------------
+        if self.file_header {
+            buffer[offset..offset + DLT_FILE_HEADER_SIZE].copy_from_slice(&DLT_FILE_HEADER_ARRAY);
+            offset += DLT_FILE_HEADER_SIZE;
+        }
+
         if self.serial_header {
             buffer[offset..offset + DLT_SERIAL_HEADER_SIZE]
                 .copy_from_slice(&DLT_SERIAL_HEADER_ARRAY);
@@ -499,7 +550,7 @@ impl<'a> DltMessageBuilder<'a> {
         // ----------------------------------------
         // 2. Write Standard Header (4 bytes)
         // ----------------------------------------
-        
+
         // HTYP byte: Update MSBF bit based on endianness
         let mut htyp = self.header_htyp;
         match self.endian {
@@ -508,7 +559,7 @@ impl<'a> DltMessageBuilder<'a> {
         }
         buffer[offset] = htyp;
         offset += 1;
-        
+
         // Message Counter (auto-incremented after generation)
         buffer[offset] = self.message_counter;
         offset += 1;
@@ -521,7 +572,7 @@ impl<'a> DltMessageBuilder<'a> {
         // ----------------------------------------
         // 3. Write Standard Header Extra Fields
         // ----------------------------------------
-        
+
         // ECU ID (4 bytes, present if WEID flag set)
         if self.header_htyp & DltHeaderHtyp::WEID_MASK != 0 {
             buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.ecu_id);
@@ -553,13 +604,9 @@ impl<'a> DltMessageBuilder<'a> {
         // ----------------------------------------
         // 4. Write Extended Header (10 bytes)
         // ----------------------------------------
-        
+
         // MSIN byte: Encode verbose flag, message type, and log level
-        let msin = encode_msin(
-            verbose,
-            MstpType::DltTypeLog.to_bits(),
-            log_level.to_bits()
-        );
+        let msin = encode_msin(verbose, MstpType::DltTypeLog.to_bits(), log_level.to_bits());
         buffer[offset] = msin;
         offset += 1;
 
@@ -606,7 +653,7 @@ impl<'a> DltMessageBuilder<'a> {
     fn _generate_log_message_header_size(&self) -> usize {
         DLT_STANDARD_HEADER_SIZE          // 4 bytes: HTYP, MCNT, LEN
             + self._standard_header_extra_size()  // 0-12 bytes: ECU ID, Session ID, Timestamp
-            + DLT_EXTENDED_HEADER_SIZE     // 10 bytes: MSIN, NOAR, APID, CTID
+            + DLT_EXTENDED_HEADER_SIZE // 10 bytes: MSIN, NOAR, APID, CTID
     }
 }
 

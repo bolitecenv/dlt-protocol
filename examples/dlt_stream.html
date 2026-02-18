@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,71 +11,71 @@
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: #333;
             padding: 20px;
         }
-        
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
         }
-        
+
         h1 {
             color: white;
             text-align: center;
             margin-bottom: 20px;
             font-size: 2em;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
         }
-        
+
         .controls {
             background: white;
             padding: 15px;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
             display: flex;
             gap: 10px;
             align-items: center;
             flex-wrap: wrap;
         }
-        
+
         .status {
             padding: 12px 20px;
             border-radius: 8px;
             margin-bottom: 20px;
             font-weight: 500;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-        
+
         .status.info {
             background: #e3f2fd;
             color: #1976d2;
             border-left: 4px solid #1976d2;
         }
-        
+
         .status.success {
             background: #e8f5e9;
             color: #388e3c;
             border-left: 4px solid #388e3c;
         }
-        
+
         .status.error {
             background: #ffebee;
             color: #c62828;
             border-left: 4px solid #c62828;
         }
-        
+
         .status.warning {
             background: #fff3e0;
             color: #f57c00;
             border-left: 4px solid #f57c00;
         }
-        
+
         button {
             padding: 10px 20px;
             border: none;
@@ -84,122 +85,122 @@
             transition: all 0.3s;
             font-weight: 500;
         }
-        
+
         button.primary {
             background: #667eea;
             color: white;
         }
-        
+
         button.primary:hover {
             background: #5568d3;
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
         }
-        
+
         button.danger {
             background: #dc3545;
             color: white;
         }
-        
+
         button.danger:hover {
             background: #c82333;
         }
-        
+
         button:disabled {
             background: #ccc;
             cursor: not-allowed;
             transform: none;
         }
-        
+
         .stats {
             background: white;
             padding: 15px;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
         }
-        
+
         .stat-item {
             text-align: center;
         }
-        
+
         .stat-value {
             font-size: 2em;
             font-weight: bold;
             color: #667eea;
         }
-        
+
         .stat-label {
             color: #666;
             font-size: 0.9em;
             margin-top: 5px;
         }
-        
+
         .messages-container {
             background: white;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             max-height: 600px;
             overflow-y: auto;
         }
-        
+
         .message-card {
             padding: 15px;
             border-bottom: 1px solid #e0e0e0;
             transition: background 0.2s;
         }
-        
+
         .message-card:hover {
             background: #f5f5f5;
         }
-        
+
         .message-card:last-child {
             border-bottom: none;
         }
-        
+
         .message-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 10px;
         }
-        
+
         .message-id {
             font-family: 'Courier New', monospace;
             font-size: 0.9em;
             color: #666;
         }
-        
+
         .message-time {
             font-size: 0.85em;
             color: #999;
         }
-        
+
         .message-info {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 10px;
             margin-bottom: 10px;
         }
-        
+
         .info-item {
             display: flex;
             gap: 5px;
         }
-        
+
         .info-label {
             font-weight: 600;
             color: #555;
         }
-        
+
         .info-value {
             font-family: 'Courier New', monospace;
             color: #667eea;
         }
-        
+
         .log-level {
             display: inline-block;
             padding: 4px 10px;
@@ -207,14 +208,44 @@
             font-size: 0.85em;
             font-weight: 600;
         }
-        
-        .log-level-0 { background: #f44336; color: white; } /* Fatal */
-        .log-level-1 { background: #ff9800; color: white; } /* Error */
-        .log-level-2 { background: #ffc107; color: #333; }  /* Warning */
-        .log-level-3 { background: #2196f3; color: white; } /* Info */
-        .log-level-4 { background: #4caf50; color: white; } /* Debug */
-        .log-level-5 { background: #9c27b0; color: white; } /* Verbose */
-        
+
+        .log-level-0 {
+            background: #f44336;
+            color: white;
+        }
+
+        /* Fatal */
+        .log-level-1 {
+            background: #ff9800;
+            color: white;
+        }
+
+        /* Error */
+        .log-level-2 {
+            background: #ffc107;
+            color: #333;
+        }
+
+        /* Warning */
+        .log-level-3 {
+            background: #2196f3;
+            color: white;
+        }
+
+        /* Info */
+        .log-level-4 {
+            background: #4caf50;
+            color: white;
+        }
+
+        /* Debug */
+        .log-level-5 {
+            background: #9c27b0;
+            color: white;
+        }
+
+        /* Verbose */
+
         .payload {
             background: #f5f5f5;
             padding: 10px;
@@ -224,18 +255,18 @@
             margin-top: 10px;
             word-break: break-all;
         }
-        
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: #999;
         }
-        
+
         .empty-state-icon {
             font-size: 4em;
             margin-bottom: 20px;
         }
-        
+
         input[type="text"] {
             padding: 10px;
             border: 2px solid #ddd;
@@ -244,22 +275,23 @@
             flex: 1;
             min-width: 200px;
         }
-        
+
         input[type="text"]:focus {
             outline: none;
             border-color: #667eea;
         }
-        
+
         label {
             font-weight: 600;
             color: #555;
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>📡 DLT Stream Viewer</h1>
-        
+
         <div class="controls">
             <label for="wsUrl">WebSocket URL:</label>
             <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://localhost:8765">
@@ -270,11 +302,11 @@
                 <input type="checkbox" id="autoscroll" checked> Auto-scroll
             </label>
         </div>
-        
+
         <div id="status" class="status info">
             ⏳ Ready to connect. Click "Connect" to start receiving DLT messages.
         </div>
-        
+
         <div class="stats">
             <div class="stat-item">
                 <div class="stat-value" id="totalCount">0</div>
@@ -293,7 +325,7 @@
                 <div class="stat-label">Messages/sec</div>
             </div>
         </div>
-        
+
         <div class="messages-container" id="messagesContainer">
             <div class="empty-state">
                 <div class="empty-state-icon">📭</div>
@@ -304,7 +336,7 @@
 
     <script>
         console.log('🚀 DLT Stream Viewer script started');
-        
+
         let wasmModule;
         let websocket;
         let messageCount = 0;
@@ -312,10 +344,11 @@
         let bytesReceived = 0;
         let messagesInLastSecond = 0;
         let messageTimestamps = [];
-        
+
         // DLT message buffer for TCP stream fragmentation
         let dltBuffer = new Uint8Array(0);
         const DLT_SERIAL_HEADER = new Uint8Array([0x44, 0x4C, 0x53, 0x01]); // "DLS\x01"
+        const DLT_FILE_HEADER = new Uint8Array([0x44, 0x4C, 0x54, 0x01]); // "DLT\x01"
 
         async function loadWasm() {
             console.log('📦 loadWasm() called');
@@ -330,15 +363,15 @@
                 console.log('✅ WASM module loaded, exports:', Object.keys(wasmModule));
                 updateStatus('success', '✅ WASM module loaded');
                 return true;
-                } catch (error) {
-                    console.error('❌ Failed to load WASM:', error);
-                    updateStatus('error', `❌ Failed to load WASM: ${error.message}`);
-                    return false;
-                }
+            } catch (error) {
+                console.error('❌ Failed to load WASM:', error);
+                updateStatus('error', `❌ Failed to load WASM: ${error.message}`);
+                return false;
             }
-    
-            async function connect() {
-                console.log('🔌 connect() called');
+        }
+
+        async function connect() {
+            console.log('🔌 connect() called');
             if (!wasmModule) {
                 console.log('⚠️  WASM not loaded, loading now...');
                 const loaded = await loadWasm();
@@ -347,7 +380,7 @@
 
             const url = document.getElementById('wsUrl').value;
             console.log('🌐 Connecting to:', url);
-            
+
             try {
                 updateStatus('info', `⏳ Connecting to ${url}...`);
                 websocket = new WebSocket(url);
@@ -365,13 +398,13 @@
                     try {
                         const chunk = new Uint8Array(event.data);
                         console.log(`📨 Received ${chunk.length} bytes`);
-                        
+
                         // Append chunk to buffer
                         const newBuffer = new Uint8Array(dltBuffer.length + chunk.length);
                         newBuffer.set(dltBuffer, 0);
                         newBuffer.set(chunk, dltBuffer.length);
                         dltBuffer = newBuffer;
-                        
+
                         // Extract complete DLT messages
                         extractDltMessages();
                     } catch (error) {
@@ -405,40 +438,47 @@
             }
             dltBuffer = new Uint8Array(0);
         }
-        
+
         function extractDltMessages() {
             while (dltBuffer.length >= 4) {
                 let offset = 0;
-                
-                // Check for serial header "DLS\x01"
+
+                // Check for file header "DLT\x01"
                 if (dltBuffer.length >= 4 &&
                     dltBuffer[0] === 0x44 && dltBuffer[1] === 0x4C &&
-                    dltBuffer[2] === 0x53 && dltBuffer[3] === 0x01) {
+                    dltBuffer[2] === 0x54 && dltBuffer[3] === 0x01) {
                     offset = 4;
                 }
-                
+
+                // Check for serial header "DLS\x01"
+                if (dltBuffer.length >= offset + 4 &&
+                    dltBuffer[offset] === 0x44 && dltBuffer[offset + 1] === 0x4C &&
+                    dltBuffer[offset + 2] === 0x53 && dltBuffer[offset + 3] === 0x01) {
+                    offset += 4;
+                }
+
                 // Need at least standard header (4 bytes) after serial header
                 if (dltBuffer.length < offset + 4) {
                     break;
                 }
-                
+
                 // Read length from standard header (bytes 2-3, little-endian)
                 const msgLen = (dltBuffer[offset + 2] << 8) | dltBuffer[offset + 3];
                 const totalLen = offset + msgLen;
-                
+
                 // Wait for complete message
                 if (dltBuffer.length < totalLen) {
                     console.log(`⏳ Waiting for complete message: ${dltBuffer.length}/${totalLen} bytes`);
                     break;
                 }
-                
+
                 // Extract complete message
                 const message = dltBuffer.slice(0, totalLen);
                 dltBuffer = dltBuffer.slice(totalLen);
-                
+
                 console.log(`✅ Complete DLT message: ${totalLen} bytes (len=${msgLen}, serial=${offset ? 'yes' : 'no'})`);
                 console.log('📦 Message hex:', Array.from(message.slice(0, 64)).map(b => b.toString(16).padStart(2, '0')).join(' '));
-                
+
                 try {
                     handleDltMessage(message);
                 } catch (error) {
@@ -454,10 +494,10 @@
             if (wasmModule.reset_allocator) {
                 wasmModule.reset_allocator();
             }
-            
+
             messageCount++;
             bytesReceived += messageBytes.length;
-            
+
             // Track messages per second
             const now = Date.now();
             messageTimestamps.push(now);
@@ -483,7 +523,7 @@
 
                 // Analyze message
                 const resultPtr = wasmModule.analyze_dlt_message(ptr, messageBytes.length);
-                
+
                 if (resultPtr === 0) {
                     console.error('Failed to analyze message, length:', messageBytes.length);
                     console.log('Message hex:', Array.from(messageBytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '));
@@ -492,34 +532,39 @@
                     return;
                 }
 
-            // Read analysis result
-            const freshBuffer = wasmModule.memory.buffer;
-            const freshMemory = new Uint8Array(freshBuffer);
-            const dataView = new DataView(freshBuffer);
+                // Read analysis result
+                const freshBuffer = wasmModule.memory.buffer;
+                const freshMemory = new Uint8Array(freshBuffer);
+                const dataView = new DataView(freshBuffer);
 
-            const totalLen = dataView.getUint16(resultPtr, true);
-            const headerLen = dataView.getUint16(resultPtr + 2, true);
-            const payloadLen = dataView.getUint16(resultPtr + 4, true);
-            const payloadOffset = dataView.getUint16(resultPtr + 6, true);
-            const msgType = freshMemory[resultPtr + 8];
-            const logLevel = freshMemory[resultPtr + 9];
-            const hasSerial = freshMemory[resultPtr + 10];
-            const hasEcu = freshMemory[resultPtr + 11];
-            
-            const ecuId = bytesToString(freshMemory.slice(resultPtr + 12, resultPtr + 16));
-            const appId = bytesToString(freshMemory.slice(resultPtr + 16, resultPtr + 20));
-            const ctxId = bytesToString(freshMemory.slice(resultPtr + 20, resultPtr + 24));
-            
-            console.log('Parsed message:', { totalLen, headerLen, payloadLen, ecuId, appId, ctxId, logLevel });
+                const totalLen = dataView.getUint16(resultPtr, true);
+                const headerLen = dataView.getUint16(resultPtr + 2, true);
+                const payloadLen = dataView.getUint16(resultPtr + 4, true);
+                const payloadOffset = dataView.getUint16(resultPtr + 6, true);
+                const msgType = freshMemory[resultPtr + 8];
+                const logLevel = freshMemory[resultPtr + 9];
+                const hasSerial = freshMemory[resultPtr + 10];
+                const hasEcu = freshMemory[resultPtr + 11];
 
-            // Extract payload
+                const ecuId = bytesToString(freshMemory.slice(resultPtr + 12, resultPtr + 16));
+                const appId = bytesToString(freshMemory.slice(resultPtr + 16, resultPtr + 20));
+                const ctxId = bytesToString(freshMemory.slice(resultPtr + 20, resultPtr + 24));
+
+                console.log('Parsed message:', { totalLen, headerLen, payloadLen, ecuId, appId, ctxId, logLevel });
+
+                // Detect file header from original message bytes
+                const hasFileHeader = (messageBytes.length >= 4 &&
+                    messageBytes[0] === 0x44 && messageBytes[1] === 0x4C &&
+                    messageBytes[2] === 0x54 && messageBytes[3] === 0x01);
+
+                // Extract payload
                 let payloadText = '';
                 if (payloadLen > 0) {
                     // Get payload data directly from current buffer (before any resets)
                     const currentBuffer = wasmModule.memory.buffer;
                     const currentMemory = new Uint8Array(currentBuffer);
                     const payloadBytes = currentMemory.slice(ptr + payloadOffset, ptr + payloadOffset + payloadLen);
-                    
+
                     // Try to decode as UTF-8 text, otherwise show hex
                     try {
                         payloadText = new TextDecoder('utf-8', { fatal: true }).decode(payloadBytes);
@@ -536,6 +581,7 @@
                     logLevel, msgType,
                     totalLen, headerLen, payloadLen,
                     payloadText,
+                    hasFileHeader,
                     timestamp: new Date()
                 });
             } catch (error) {
@@ -548,7 +594,7 @@
 
         function displayMessage(msg) {
             const container = document.getElementById('messagesContainer');
-            
+
             // Remove empty state
             if (container.querySelector('.empty-state')) {
                 container.innerHTML = '';
@@ -585,6 +631,10 @@
                         <span class="info-label">Size:</span>
                         <span class="info-value">${msg.totalLen} bytes (${msg.payloadLen} payload)</span>
                     </div>
+                    ${msg.hasFileHeader ? `<div class="info-item">
+                        <span class="info-label">File Hdr:</span>
+                        <span class="info-value" style="color:#4caf50;">DLT\\x01</span>
+                    </div>` : ''}
                 </div>
                 ${msg.payloadText ? `<div class="payload">${escapeHtml(msg.payloadText)}</div>` : ''}
             `;
@@ -658,8 +708,9 @@
                 websocket.close();
             }
         };
-        
+
         console.log('✅ DLT Stream Viewer script loaded');
     </script>
 </body>
+
 </html>
