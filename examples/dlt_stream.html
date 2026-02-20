@@ -293,18 +293,27 @@
         <h1>📡 DLT Stream Viewer</h1>
 
         <div class="controls">
-            <label for="wsUrl">WebSocket URL:</label>
-            <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://localhost:8765">
+            <label for="dltHost">DLT Daemon:</label>
+            <input type="text" id="dltHost" value="localhost" placeholder="hostname" style="min-width:120px; flex:0 1 auto;">
+            <label for="dltPort">:</label>
+            <input type="text" id="dltPort" value="3490" placeholder="port" style="min-width:60px; width:70px; flex:0 0 auto;">
             <button class="primary" id="connectBtn" onclick="connect()">Connect</button>
             <button class="danger" id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
             <button class="primary" onclick="clearMessages()">Clear</button>
             <label>
                 <input type="checkbox" id="autoscroll" checked> Auto-scroll
             </label>
+            <details style="flex-basis:100%; margin-top:4px;">
+                <summary style="cursor:pointer; font-size:13px; color:#888;">Advanced: Bridge URL</summary>
+                <div style="margin-top:6px; display:flex; align-items:center; gap:8px;">
+                    <label for="wsUrl" style="font-size:13px;">WebSocket Bridge:</label>
+                    <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://localhost:8765" style="font-size:13px;">
+                </div>
+            </details>
         </div>
 
         <div id="status" class="status info">
-            ⏳ Ready to connect. Click "Connect" to start receiving DLT messages.
+            ⏳ Ready to connect. Enter DLT daemon address and click "Connect".
         </div>
 
         <div class="stats">
@@ -378,24 +387,47 @@
                 if (!loaded) return;
             }
 
-            const url = document.getElementById('wsUrl').value;
-            console.log('🌐 Connecting to:', url);
+            const wsUrl = document.getElementById('wsUrl').value;
+            const dltHost = document.getElementById('dltHost').value || 'localhost';
+            const dltPort = parseInt(document.getElementById('dltPort').value) || 3490;
+            console.log(`🌐 Connecting via bridge ${wsUrl} → TCP ${dltHost}:${dltPort}`);
 
             try {
-                updateStatus('info', `⏳ Connecting to ${url}...`);
-                websocket = new WebSocket(url);
+                updateStatus('info', `⏳ Connecting to bridge ${wsUrl}...`);
+                websocket = new WebSocket(wsUrl);
                 websocket.binaryType = 'arraybuffer';
-                console.log('✅ WebSocket created');
 
                 websocket.onopen = () => {
-                    console.log('✅ WebSocket connected!');
-                    updateStatus('success', `✅ Connected to ${url}`);
+                    console.log('✅ WebSocket connected to bridge');
+                    updateStatus('info', `⏳ Bridge connected, requesting TCP ${dltHost}:${dltPort}...`);
                     document.getElementById('connectBtn').disabled = true;
                     document.getElementById('disconnectBtn').disabled = false;
+                    // Send TCP target to bridge
+                    websocket.send(JSON.stringify({
+                        cmd: 'connect',
+                        host: dltHost,
+                        port: dltPort
+                    }));
                 };
 
                 websocket.onmessage = (event) => {
                     try {
+                        // Text messages are JSON status from bridge
+                        if (typeof event.data === 'string') {
+                            const msg = JSON.parse(event.data);
+                            if (msg.type === 'status') {
+                                if (msg.status === 'connected') {
+                                    updateStatus('success', `✅ Connected to dlt-daemon at ${msg.host}:${msg.port}`);
+                                } else if (msg.status === 'disconnected') {
+                                    updateStatus('warning', `⚠️  Disconnected from dlt-daemon: ${msg.message || ''}`);
+                                } else if (msg.status === 'error') {
+                                    updateStatus('error', `❌ TCP error: ${msg.message || 'Unknown error'}`);
+                                }
+                            }
+                            return;
+                        }
+
+                        // Binary messages are DLT data
                         const chunk = new Uint8Array(event.data);
                         console.log(`📨 Received ${chunk.length} bytes`);
 
@@ -416,12 +448,12 @@
 
                 websocket.onerror = (error) => {
                     console.error('❌ WebSocket error:', error);
-                    updateStatus('error', `❌ WebSocket error: ${error.message || 'Connection failed'}`);
+                    updateStatus('error', `❌ Bridge connection error. Is the bridge running? (${wsUrl})`);
                 };
 
                 websocket.onclose = () => {
                     console.log('👋 WebSocket closed');
-                    updateStatus('warning', '⚠️  Disconnected from WebSocket');
+                    updateStatus('warning', '⚠️  Bridge connection closed');
                     document.getElementById('connectBtn').disabled = false;
                     document.getElementById('disconnectBtn').disabled = true;
                 };
@@ -433,6 +465,10 @@
 
         function disconnect() {
             if (websocket) {
+                // Tell bridge to disconnect TCP first
+                try {
+                    websocket.send(JSON.stringify({ cmd: 'disconnect' }));
+                } catch (e) { /* ignore */ }
                 websocket.close();
                 websocket = null;
             }

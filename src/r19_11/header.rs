@@ -30,9 +30,6 @@
 /// DLT ID field size (ECU ID, App ID, Context ID)
 pub const DLT_ID_SIZE: usize = 4;
 
-/// Storage header size (not used in runtime messages)
-pub const DLT_STORAGE_HEADER_SIZE: usize = 16;
-
 /// Standard header size (HTYP + MCNT + LEN)
 pub const DLT_STANDARD_HEADER_SIZE: usize = 4;
 
@@ -83,11 +80,27 @@ pub const DLT_SERIAL_HEADER_SIZE: usize = 4;
 /// Serial header pattern: "DLS" + 0x01
 pub const DLT_SERIAL_HEADER_ARRAY: [u8; DLT_SERIAL_HEADER_SIZE] = [0x44, 0x4C, 0x53, 0x01];
 
-/// File header size: 4 bytes
+/// Storage header pattern size: 4 bytes ("DLT" + 0x01)
 pub const DLT_FILE_HEADER_SIZE: usize = 4;
 
-/// File header pattern: "DLT" + 0x01
+/// Storage header pattern (magic bytes only): "DLT" + 0x01
 pub const DLT_FILE_HEADER_ARRAY: [u8; DLT_FILE_HEADER_SIZE] = [0x44, 0x4C, 0x54, 0x01];
+
+/// Full DLT storage header size: 16 bytes
+/// Layout: pattern(4) + seconds(4) + microseconds(4) + ecu_id(4)
+pub const DLT_STORAGE_HEADER_SIZE: usize = 16;
+
+/// Parsed DLT storage header (prepended to messages stored in .dlt files)
+/// Not present in network/serial streams — file storage only.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DltStorageHeader {
+    /// Seconds since Unix epoch (when the message was stored)
+    pub seconds: u32,
+    /// Microseconds part of the storage timestamp
+    pub microseconds: u32,
+    /// ECU ID recorded by the logger (may differ from standard header ECU ID)
+    pub ecu_id: [u8; DLT_ID_SIZE],
+}
 
 // ========================================
 // Service Message Suffix Constants
@@ -382,8 +395,10 @@ pub enum DltHeaderError {
 pub struct DltMessage<'a> {
     /// Whether the message included a serial header
     pub has_serial_header: bool,
-    /// Whether the data started with a DLT file header
+    /// Whether the data started with a DLT storage header (16-byte prefix in .dlt files)
     pub has_file_header: bool,
+    /// Parsed storage header fields (valid only when `has_file_header` is true)
+    pub storage_header: Option<DltStorageHeader>,
     /// Standard header (always present)
     pub standard_header: DltStandardHeader,
     /// Decoded header type flags
@@ -453,9 +468,11 @@ impl<'a> DltHeaderParser<'a> {
         // Check for optional file header ("DLT\x01") and serial header ("DLS\x01").
         // File header is used at the start of DLT files; serial header is used for streams.
         let has_file = self.check_file_header();
-        if has_file {
-            self.skip_file_header()?;
-        }
+        let storage_header = if has_file {
+            Some(self.read_storage_header()?)
+        } else {
+            None
+        };
 
         let has_serial = self.check_serial_header();
         if has_serial {
@@ -486,7 +503,7 @@ impl<'a> DltHeaderParser<'a> {
         // standard header 'len' field. Similarly for serial header.
         let mut header_bytes_consumed = self.position - start_position;
         if has_file {
-            header_bytes_consumed = header_bytes_consumed.saturating_sub(DLT_FILE_HEADER_SIZE);
+            header_bytes_consumed = header_bytes_consumed.saturating_sub(DLT_STORAGE_HEADER_SIZE);
         }
         if has_serial {
             header_bytes_consumed = header_bytes_consumed.saturating_sub(DLT_SERIAL_HEADER_SIZE);
@@ -507,6 +524,7 @@ impl<'a> DltHeaderParser<'a> {
         Ok(DltMessage {
             has_serial_header: has_serial,
             has_file_header: has_file,
+            storage_header,
             standard_header,
             header_type,
             ecu_id,
@@ -535,7 +553,7 @@ impl<'a> DltHeaderParser<'a> {
         Ok(())
     }
 
-    /// Check if the buffer starts with a DLT file header
+    /// Check if the buffer starts with a DLT storage header pattern ("DLT\x01")
     fn check_file_header(&self) -> bool {
         if self.position + DLT_FILE_HEADER_SIZE > self.data.len() {
             return false;
@@ -543,13 +561,38 @@ impl<'a> DltHeaderParser<'a> {
         &self.data[self.position..self.position + DLT_FILE_HEADER_SIZE] == &DLT_FILE_HEADER_ARRAY
     }
 
-    /// Skip the DLT file header
-    fn skip_file_header(&mut self) -> Result<(), DltHeaderError> {
-        if self.position + DLT_FILE_HEADER_SIZE > self.data.len() {
+    /// Read the full 16-byte DLT storage header and advance position
+    fn read_storage_header(&mut self) -> Result<DltStorageHeader, DltHeaderError> {
+        if self.position + DLT_STORAGE_HEADER_SIZE > self.data.len() {
             return Err(DltHeaderError::BufferTooSmall);
         }
+        // Skip pattern bytes (already checked)
         self.position += DLT_FILE_HEADER_SIZE;
-        Ok(())
+        // Seconds (LE per AUTOSAR spec)
+        let seconds = u32::from_le_bytes([
+            self.data[self.position],
+            self.data[self.position + 1],
+            self.data[self.position + 2],
+            self.data[self.position + 3],
+        ]);
+        self.position += 4;
+        // Microseconds (LE)
+        let microseconds = u32::from_le_bytes([
+            self.data[self.position],
+            self.data[self.position + 1],
+            self.data[self.position + 2],
+            self.data[self.position + 3],
+        ]);
+        self.position += 4;
+        // ECU ID (4 bytes ASCII)
+        let mut ecu_id = [0u8; DLT_ID_SIZE];
+        ecu_id.copy_from_slice(&self.data[self.position..self.position + DLT_ID_SIZE]);
+        self.position += DLT_ID_SIZE;
+        Ok(DltStorageHeader {
+            seconds,
+            microseconds,
+            ecu_id,
+        })
     }
 
     /// Parse the standard header (4 bytes)

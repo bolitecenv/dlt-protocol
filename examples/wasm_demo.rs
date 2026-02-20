@@ -59,7 +59,7 @@ pub extern "C" fn create_dlt_message_with_file_header(
     if buffer_ptr.is_null() {
         return ERROR_NULL_POINTER;
     }
-    if buffer_len < 104 {
+    if buffer_len < 116 {
         return ERROR_BUFFER_TOO_SMALL;
     }
 
@@ -166,7 +166,7 @@ pub extern "C" fn analyze_dlt_message(buffer_ptr: *const u8, buffer_len: usize) 
     let payload_len = parsed_msg.payload.len() as u16;
 
     // Calculate payload offset in original buffer
-    let file_offset = if parsed_msg.has_file_header { 4 } else { 0 };
+    let file_offset = if parsed_msg.has_file_header { 16 } else { 0 };
     let serial_offset = if parsed_msg.has_serial_header { 4 } else { 0 };
     let payload_offset = (file_offset + serial_offset + header_len) as u16;
 

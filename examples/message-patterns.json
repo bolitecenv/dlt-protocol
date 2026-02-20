@@ -1,0 +1,302 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "DLT Viewer message routing patterns. Each view defines one or more regex patterns that match against the DLT payload string. Patterns are tested in the order they appear; the first match wins.",
+    "version": "1.0.0",
+    "views": {
+        "register": {
+            "description": "Register/variable monitor view. Displays name→value pairs with optional timestamp.",
+            "patterns": [
+                {
+                    "id": "reg_with_timestamp",
+                    "description": "REG with leading timestamp: REG:<timestamp>:<name>:<value>",
+                    "regex": "^REG:([\\d.]+):([^:]+):(.+)$",
+                    "groups": {
+                        "1": "timestamp",
+                        "2": "name",
+                        "3": "value"
+                    },
+                    "example": "REG:1700000000.123:voltage:3.3"
+                },
+                {
+                    "id": "reg_simple",
+                    "description": "REG without timestamp: REG:<name>:<value>",
+                    "regex": "^REG:([^:]+):(.+)$",
+                    "groups": {
+                        "1": "name",
+                        "2": "value"
+                    },
+                    "example": "REG:motor_speed:1500"
+                },
+                {
+                    "id": "reg_hex",
+                    "description": "REG with hex value: REG:<name>:0x<hex>",
+                    "regex": "^REG:([^:]+):(0x[0-9A-Fa-f]+)$",
+                    "groups": {
+                        "1": "name",
+                        "2": "value"
+                    },
+                    "example": "REG:STATUS_REG:0xFF"
+                }
+            ]
+        },
+        "chart": {
+            "description": "Time-series chart view. Plots numeric value against timestamp for a named series.",
+            "patterns": [
+                {
+                    "id": "chart_named_ts_value",
+                    "description": "Named series with timestamp: <name>:<timestamp>:<value>",
+                    "regex": "^([^:]+):([\\d.]+):(-?[\\d.]+(?:e[+-]?\\d+)?)$",
+                    "groups": {
+                        "1": "name",
+                        "2": "timestamp",
+                        "3": "value"
+                    },
+                    "example": "temperature:1700000001.500:72.4"
+                },
+                {
+                    "id": "chart_multi_value",
+                    "description": "Multi-value with timestamp: <name>:<timestamp>:<v1>,<v2>,...",
+                    "regex": "^([^:]+):([\\d.]+):(-?[\\d.]+(?:,-?[\\d.]+)+)$",
+                    "groups": {
+                        "1": "name",
+                        "2": "timestamp",
+                        "3": "values_csv"
+                    },
+                    "example": "accel:1700000002.000:0.12,-0.03,9.81"
+                }
+            ]
+        },
+        "trace": {
+            "description": "Execution trace / timeline view. Records start/end spans for named tasks or IDs.",
+            "patterns": [
+                {
+                    "id": "trace_span",
+                    "description": "Trace span event: <id>:<timestamp>:<start|end>:<metadata>",
+                    "regex": "^([^:]+):([\\d.]+):(start|end):(.*)$",
+                    "groups": {
+                        "1": "id",
+                        "2": "timestamp",
+                        "3": "type",
+                        "4": "metadata"
+                    },
+                    "example": "task_A:1700000003.000:start:priority=5"
+                },
+                {
+                    "id": "trace_span_no_meta",
+                    "description": "Trace span without metadata: <id>:<timestamp>:<start|end>",
+                    "regex": "^([^:]+):([\\d.]+):(start|end)$",
+                    "groups": {
+                        "1": "id",
+                        "2": "timestamp",
+                        "3": "type"
+                    },
+                    "example": "isr_handler:1700000004.200:end"
+                }
+            ]
+        },
+        "callstack": {
+            "description": "Call graph / call-stack view. Tracks function entry and exit per thread.",
+            "patterns": [
+                {
+                    "id": "call_thread_fn",
+                    "description": "Call with thread: <threadId>:<functionName>:<timestamp>:<start|end>",
+                    "regex": "^([^:]+):([^:]+):([\\d.]+):(start|end)$",
+                    "groups": {
+                        "1": "threadId",
+                        "2": "functionName",
+                        "3": "timestamp",
+                        "4": "type"
+                    },
+                    "example": "main:hal_init:1700000005.000:start"
+                },
+                {
+                    "id": "call_fn_only",
+                    "description": "Call without thread (inferred): <functionName>:<timestamp>:<start|end>",
+                    "regex": "^([^:]+):([\\d.]+):(start|end)$",
+                    "groups": {
+                        "1": "functionName",
+                        "2": "timestamp",
+                        "3": "type"
+                    },
+                    "note": "Resolved last when trace_span_no_meta also matches — use field semantics to disambiguate",
+                    "example": "CAN_Transmit:1700000005.100:end"
+                }
+            ]
+        },
+        "log": {
+            "description": "General DLT log view. Fallback parser for colon-separated and timestamped text logs.",
+            "patterns": [
+                {
+                    "id": "dlt_colon_full",
+                    "description": "Full colon-separated DLT log: <ECU>:<APP>:<CTX>:<LEVEL>:<payload>",
+                    "regex": "^([^:]{1,4}):([^:]{1,4}):([^:]{1,4}):(FATAL|ERROR|WARN|INFO|DEBUG|VERBOSE):(.+)$",
+                    "flags": "i",
+                    "groups": {
+                        "1": "ecuId",
+                        "2": "appId",
+                        "3": "ctxId",
+                        "4": "level",
+                        "5": "payload"
+                    },
+                    "example": "ECU1:APP1:CTX1:INFO:System started"
+                },
+                {
+                    "id": "log_timestamped_bracketed",
+                    "description": "Timestamped log with bracketed level: <ISO_ts> [LEVEL] <message>",
+                    "regex": "^(\\d{4}[-/]\\d{2}[-/]\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}[.\\d]*)\\s+\\[(FATAL|ERROR|WARN|INFO|DEBUG|VERBOSE|DLT_LOG_\\w+)\\]\\s*(.+)$",
+                    "flags": "i",
+                    "groups": {
+                        "1": "timestamp",
+                        "2": "level",
+                        "3": "message"
+                    },
+                    "example": "2024-01-15 12:00:00.123 [WARN] Buffer overflow detected"
+                },
+                {
+                    "id": "log_level_prefix",
+                    "description": "Level-prefixed log: <LEVEL>: <message>",
+                    "regex": "^(FATAL|ERROR|WARN|WARNING|INFO|DEBUG|VERBOSE):\\s+(.+)$",
+                    "flags": "i",
+                    "groups": {
+                        "1": "level",
+                        "2": "message"
+                    },
+                    "example": "ERROR: CAN timeout on bus 0"
+                }
+            ]
+        },
+        "service": {
+            "description": "DLT control/service message view. Matches structured service protocol payloads.",
+            "patterns": [
+                {
+                    "id": "service_response",
+                    "description": "Service response marker in payload text",
+                    "regex": "^\\[SVC_(RESP|REQ)\\]\\s+id=(0x[0-9A-Fa-f]+)\\s+status=(\\d+)\\s*(.*)$",
+                    "groups": {
+                        "1": "direction",
+                        "2": "serviceId",
+                        "3": "status",
+                        "4": "extra"
+                    },
+                    "example": "[SVC_RESP] id=0x03 status=0 app=APP1 ctx=CTX1"
+                }
+            ]
+        },
+        "debug": {
+            "description": "Debug console view. Captures build output, run output, and GDB responses.",
+            "patterns": [
+                {
+                    "id": "build_error",
+                    "description": "GCC/Clang/Cargo build error",
+                    "regex": "^(.+?):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.+)$",
+                    "flags": "i",
+                    "groups": {
+                        "1": "file",
+                        "2": "line",
+                        "3": "column",
+                        "4": "severity",
+                        "5": "message"
+                    },
+                    "example": "src/main.c:42:5: error: use of undeclared identifier 'foo'"
+                },
+                {
+                    "id": "cargo_error",
+                    "description": "Rust/Cargo error line",
+                    "regex": "^error(?:\\[([A-Z]\\d+)\\])?:\\s+(.+)$",
+                    "groups": {
+                        "1": "errorCode",
+                        "2": "message"
+                    },
+                    "example": "error[E0425]: cannot find value `foo` in this scope"
+                },
+                {
+                    "id": "gdb_response",
+                    "description": "GDB MI or console output line",
+                    "regex": "^([~@&*^=])\"?(.+?)\"?$",
+                    "groups": {
+                        "1": "streamType",
+                        "2": "payload"
+                    },
+                    "note": "streamType: ~ = console, @ = target, & = log, * = async exec, ^ = result, = = async notify",
+                    "example": "~\"Breakpoint 1 at 0x400522\""
+                }
+            ]
+        }
+    },
+    "routing": {
+        "description": "Priority order for view routing when a message could match multiple views. Earlier entries win.",
+        "priority": [
+            "register",
+            "trace",
+            "callstack",
+            "chart",
+            "service",
+            "log",
+            "debug"
+        ]
+    },
+    "logLevels": {
+        "description": "Canonical log level names and their numeric codes (DLT R19.11 standard).",
+        "levels": [
+            {
+                "code": 0,
+                "name": "UNKNOWN",
+                "aliases": []
+            },
+            {
+                "code": 1,
+                "name": "FATAL",
+                "aliases": [
+                    "DLT_LOG_FATAL",
+                    "CRITICAL",
+                    "FATAL"
+                ]
+            },
+            {
+                "code": 2,
+                "name": "ERROR",
+                "aliases": [
+                    "DLT_LOG_ERROR",
+                    "ERR",
+                    "ERROR"
+                ]
+            },
+            {
+                "code": 3,
+                "name": "WARN",
+                "aliases": [
+                    "DLT_LOG_WARN",
+                    "WARNING",
+                    "WARN"
+                ]
+            },
+            {
+                "code": 4,
+                "name": "INFO",
+                "aliases": [
+                    "DLT_LOG_INFO",
+                    "INF",
+                    "INFO"
+                ]
+            },
+            {
+                "code": 5,
+                "name": "DEBUG",
+                "aliases": [
+                    "DLT_LOG_DEBUG",
+                    "DBG",
+                    "DEBUG"
+                ]
+            },
+            {
+                "code": 6,
+                "name": "VERBOSE",
+                "aliases": [
+                    "DLT_LOG_VERBOSE",
+                    "TRACE",
+                    "VERBOSE"
+                ]
+            }
+        ]
+    }
+}

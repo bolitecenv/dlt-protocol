@@ -765,8 +765,11 @@ fn test_file_header_generate_and_parse() {
         )
         .expect("generate message");
 
-    // Verify file header bytes present at start
+    // Verify storage header at start: magic(4) + seconds LE(4) + microseconds LE(4) + ECU ID(4)
     assert_eq!(&buffer[0..DLT_FILE_HEADER_SIZE], &DLT_FILE_HEADER_ARRAY);
+    assert_eq!(&buffer[4..8], &0u32.to_le_bytes());  // seconds = 0
+    assert_eq!(&buffer[8..12], &0u32.to_le_bytes()); // microseconds = 0
+    assert_eq!(&buffer[12..16], b"FILE");             // ECU ID from storage header
 
     // Parse the generated message and verify parser detects file header
     let mut parser = DltHeaderParser::new(&buffer[..total]);
@@ -774,6 +777,12 @@ fn test_file_header_generate_and_parse() {
 
     assert!(msg.has_file_header);
     assert!(!msg.has_serial_header);
+    // Verify storage header fields were parsed correctly
+    assert!(msg.storage_header.is_some());
+    let sh = msg.storage_header.unwrap();
+    assert_eq!(sh.seconds, 0);
+    assert_eq!(sh.microseconds, 0);
+    assert_eq!(&sh.ecu_id, b"FILE");
     assert_eq!(msg.payload, payload);
 }
 

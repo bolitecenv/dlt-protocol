@@ -373,7 +373,7 @@ impl<'a> DltMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let header_size = self._generate_log_message_header_size();
         let file_size = if self.file_header {
-            DLT_FILE_HEADER_SIZE
+            DLT_STORAGE_HEADER_SIZE
         } else {
             0
         };
@@ -443,7 +443,7 @@ impl<'a> DltMessageBuilder<'a> {
     ) -> Result<usize, DltError> {
         let header_size = self._generate_log_message_header_size();
         let file_size = if self.file_header {
-            DLT_FILE_HEADER_SIZE
+            DLT_STORAGE_HEADER_SIZE
         } else {
             0
         };
@@ -537,8 +537,18 @@ impl<'a> DltMessageBuilder<'a> {
         // 1. Write File Header (optional) then Serial Header (optional)
         // ----------------------------------------
         if self.file_header {
+            // Write full 16-byte DLT storage header: pattern + seconds + microseconds + ECU ID
             buffer[offset..offset + DLT_FILE_HEADER_SIZE].copy_from_slice(&DLT_FILE_HEADER_ARRAY);
             offset += DLT_FILE_HEADER_SIZE;
+            // seconds (LE u32, default 0)
+            buffer[offset..offset + 4].copy_from_slice(&0u32.to_le_bytes());
+            offset += 4;
+            // microseconds (LE u32, default 0)
+            buffer[offset..offset + 4].copy_from_slice(&0u32.to_le_bytes());
+            offset += 4;
+            // ECU ID (4 bytes)
+            buffer[offset..offset + DLT_ID_SIZE].copy_from_slice(self.ecu_id);
+            offset += DLT_ID_SIZE;
         }
 
         if self.serial_header {
